@@ -8,6 +8,11 @@ export type DrowsinessFeatures = {
   session_id?: string;
   captured_at?: string;
   feature_source?: string;
+  user_id?: string;
+  display_name?: string;
+  source?: string;
+  save_capture?: boolean;
+  log_reaction_event?: boolean;
 };
 
 export type NormalizedFeatures = {

@@ -89,10 +89,14 @@ export async function POST(request: Request) {
   } catch {
     return Response.json({
       ...analyzeDrowsiness(features, "next-fallback-threshold"),
+      saved_capture: false,
       warning:
         "The configured Flask analyzer could not be reached. Returning built-in threshold scoring instead.",
     });
   }
 
-  return Response.json(analyzeDrowsiness(features, "next-threshold"));
+  return Response.json({
+    ...analyzeDrowsiness(features, "next-threshold"),
+    saved_capture: false,
+  });
 }

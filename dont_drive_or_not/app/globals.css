@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f7f0e6;
-  --foreground: #1f1d1a;
-  --panel: rgba(255, 251, 245, 0.72);
-  --panel-strong: rgba(255, 250, 243, 0.92);
-  --line: rgba(79, 60, 40, 0.14);
+  --background: #0f1016;
+  --foreground: #f8f9ff;
+  --panel: rgba(18, 22, 34, 0.78);
+  --panel-strong: rgba(14, 18, 28, 0.92);
+  --line: rgba(186, 205, 255, 0.18);
   --accent: #c45d2f;
   --accent-soft: #f0b493;
   --safe: #245a42;
@@ -30,9 +30,9 @@ html {
 
 body {
   background:
-    radial-gradient(circle at top left, rgba(255, 213, 181, 0.85), transparent 34%),
-    radial-gradient(circle at top right, rgba(246, 194, 127, 0.55), transparent 28%),
-    linear-gradient(180deg, #f9f3ea 0%, #efe3d3 100%);
+    radial-gradient(circle at top left, rgba(55, 74, 126, 0.45), transparent 34%),
+    radial-gradient(circle at top right, rgba(93, 45, 22, 0.35), transparent 28%),
+    linear-gradient(180deg, #141824 0%, #0d111c 100%);
   color: var(--foreground);
   font-family: var(--font-space-grotesk), sans-serif;
 }
@@ -50,4 +50,11 @@ select {
 
 video {
   display: block;
+}
+
+/* Enforce white-readable text across existing utility-heavy markup */
+[class*="text-black"],
+[class*="text-zinc-"],
+[class*="text-foreground"] {
+  color: #f8f9ff !important;
 }

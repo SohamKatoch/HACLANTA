@@ -20,7 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { clearStoredSession, getStoredSession } from "@/lib/session";
+import { clearStoredSession, getStoredSession, type AppSession } from "@/lib/session";
 
 const SAMPLE_INTERVAL_MS = 450;
 const ANALYSIS_INTERVAL_MS = 3500;
@@ -44,6 +44,24 @@ type WindowStats = {
   mean: number;
   stdDev: number;
   darkCentroidY: number;
+};
+
+type HistoryItem = {
+  id: number;
+  user_id: string;
+  eye_closure: number;
+  blink_rate: number;
+  head_tilt: number;
+  reaction_time: number;
+  status: "SAFE" | "NOT SAFE";
+  confidence: number;
+  score: number | null;
+  source: string;
+  created_at: string;
+};
+
+type AnalyzeApiResponse = DrowsinessAssessment & {
+  saved_capture?: boolean;
 };
 
 const DEFAULT_METRICS: LiveMetrics = {
@@ -216,7 +234,21 @@ export default function DrowsinessMonitor({
   const [lastReactionTime, setLastReactionTime] = useState<number | null>(null);
   const [sessionName, setSessionName] = useState("Driver");
   const [sessionEmail, setSessionEmail] = useState("");
+  const [sessionUserId, setSessionUserId] = useState("");
+  const [sessionVin, setSessionVin] = useState("");
   const [sessionReady, setSessionReady] = useState(false);
+  const [capturePending, setCapturePending] = useState(false);
+  const [captureNotice, setCaptureNotice] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  function applySession(session: AppSession) {
+    setSessionName(session.name);
+    setSessionEmail(session.email);
+    setSessionUserId(session.userId);
+    setSessionVin(session.vin);
+  }
 
   function clearReactionTimers() {
     if (reactionCueTimeoutRef.current) {
@@ -242,6 +274,7 @@ export default function DrowsinessMonitor({
     setLastReactionTime(null);
     setAssessment(null);
     setSubmissionError(null);
+    setCaptureNotice(null);
     setCameraError(null);
     setMetrics(DEFAULT_METRICS);
     calibrationSamplesRef.current = [];
@@ -427,6 +460,9 @@ export default function DrowsinessMonitor({
       session_id: sessionIdRef.current,
       captured_at: new Date().toISOString(),
       feature_source: "browser-heuristic-v1",
+      user_id: sessionUserId || undefined,
+      display_name: sessionName,
+      source: "dont-drive-or-not",
     };
 
     try {
@@ -456,6 +492,125 @@ export default function DrowsinessMonitor({
     }
   });
 
+  const fetchHistory = useEffectEvent(async () => {
+    if (!sessionUserId) {
+      setHistory([]);
+      return;
+    }
+
+    setHistoryLoading(true);
+    setHistoryError(null);
+
+    try {
+      const response = await fetch(
+        `/api/history?user_id=${encodeURIComponent(sessionUserId)}&limit=10`,
+        {
+          cache: "no-store",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`History returned ${response.status}`);
+      }
+
+      const result = (await response.json()) as { items?: HistoryItem[] };
+      setHistory(result.items ?? []);
+    } catch {
+      setHistory([]);
+      setHistoryError("History is unavailable until the Flask and Supabase connection is active.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  });
+
+  async function captureCurrentSnapshot() {
+    const storedSession = getStoredSession();
+    const activeSession =
+      sessionUserId && sessionName
+        ? {
+            name: sessionName,
+            email: sessionEmail,
+            userId: sessionUserId,
+            vin: sessionVin,
+            signedInAt: storedSession?.signedInAt ?? new Date().toISOString(),
+          }
+        : storedSession;
+
+    if (!activeSession?.userId) {
+      setCaptureNotice("Your sign-in session is missing. Please sign in again before capturing.");
+      if (requireSession) {
+        router.push("/login");
+      }
+      return;
+    }
+
+    if (!sessionUserId || sessionUserId !== activeSession.userId) {
+      applySession(activeSession);
+    }
+
+    const payload: DrowsinessFeatures = {
+      eye_closure: Number(metrics.eyeClosure.toFixed(3)),
+      blink_rate: Number(metrics.blinkRate.toFixed(2)),
+      head_tilt: Number(metrics.headTilt.toFixed(2)),
+      reaction_time: Number(metrics.reactionTime.toFixed(2)),
+      session_id: sessionIdRef.current,
+      captured_at: new Date().toISOString(),
+      feature_source: "browser-heuristic-v1",
+      user_id: activeSession.userId,
+      display_name: activeSession.name,
+      source: "dont-drive-or-not",
+      save_capture: true,
+    };
+
+    setCapturePending(true);
+    setCaptureNotice(null);
+    setSubmissionError(null);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Capture returned ${response.status}`);
+      }
+
+      const result = (await response.json()) as AnalyzeApiResponse;
+
+      startTransition(() => {
+        setAssessment(result);
+        setCaptureNotice(
+          result.saved_capture
+            ? "Snapshot captured and added to this user's history."
+            : "Snapshot analyzed, but backend storage is not connected yet.",
+        );
+      });
+
+      const historyResponse = await fetch(
+        `/api/history?user_id=${encodeURIComponent(activeSession.userId)}&limit=10`,
+        {
+          cache: "no-store",
+        },
+      );
+
+      if (historyResponse.ok) {
+        const historyResult = (await historyResponse.json()) as { items?: HistoryItem[] };
+        setHistory(historyResult.items ?? []);
+      }
+    } catch {
+      startTransition(() => {
+        setAssessment(analyzeDrowsiness(payload, "local-browser-fallback"));
+        setCaptureNotice("Snapshot capture failed before it could be stored.");
+      });
+    } finally {
+      setCapturePending(false);
+    }
+  }
+
   useEffect(() => {
     if (stage !== "calibrating" && stage !== "active") {
       return;
@@ -479,6 +634,14 @@ export default function DrowsinessMonitor({
 
     return () => window.clearInterval(intervalId);
   }, [stage]);
+
+  useEffect(() => {
+    if (!sessionReady || !sessionUserId) {
+      return;
+    }
+
+    void fetchHistory();
+  }, [sessionReady, sessionUserId]);
 
   useEffect(() => {
     if (stage === "calibrating" || stage === "active") {
@@ -507,8 +670,7 @@ export default function DrowsinessMonitor({
     const stored = getStoredSession();
 
     if (stored) {
-      setSessionName(stored.name);
-      setSessionEmail(stored.email);
+      applySession(stored);
       setSessionReady(true);
       return;
     }
@@ -619,7 +781,8 @@ export default function DrowsinessMonitor({
             <Badge variant="outline">Signed In</Badge>
             <span className="text-sm text-black/65">
               {sessionName ?? "Driver"}
-              {sessionEmail ? ` · ${sessionEmail}` : ""}
+              {sessionEmail ? ` | ${sessionEmail}` : ""}
+              {sessionVin ? ` | VIN ${sessionVin}` : ""}
             </span>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -727,6 +890,13 @@ export default function DrowsinessMonitor({
                 {stage === "idle" || stage === "error" ? "Start Monitoring" : "Restart Session"}
               </Button>
               <Button
+                onClick={() => void captureCurrentSnapshot()}
+                type="button"
+                variant="accent"
+              >
+                {capturePending ? "Capturing Snapshot" : "Capture Snapshot"}
+              </Button>
+              <Button
                 onClick={stopMonitoring}
                 variant="secondary"
                 type="button"
@@ -735,10 +905,12 @@ export default function DrowsinessMonitor({
               </Button>
             </div>
 
-            {(cameraError || submissionError) && (
+            {(cameraError || submissionError || captureNotice) && (
               <Alert>
                 <AlertTitle>Monitor Notice</AlertTitle>
-                <AlertDescription>{cameraError ?? submissionError}</AlertDescription>
+                <AlertDescription>
+                  {cameraError ?? submissionError ?? captureNotice}
+                </AlertDescription>
               </Alert>
             )}
           </div>
@@ -828,26 +1000,77 @@ export default function DrowsinessMonitor({
             <Card className="rounded-[1.8rem]">
               <CardHeader>
                 <p className="font-mono text-xs uppercase tracking-[0.25em] text-black/45">
-                  Extension Points
+                  Capture History
                 </p>
                 <CardDescription>
-                  The frontend now uses shadcn-style primitives, while the backend keeps a stable
-                  contract for a future model swap.
+                  Captured snapshots are stored per user and listed here newest first.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3 text-sm leading-6 text-black/62">
-                <p>
-                  Swap the browser heuristic extractor for MediaPipe, OpenCV.js, or TF.js while
-                  keeping the same payload shape.
-                </p>
-                <p>
-                  Point <span className="font-mono">FLASK_API_URL</span> at the Python service to
-                  proxy requests through a real backend model without changing the frontend fetch.
-                </p>
-                <p>
-                  Persist only numeric features to Supabase once the data model is ready. No image
-                  storage is required for this starter.
-                </p>
+              <CardContent>
+                {historyLoading ? (
+                  <p className="text-sm text-black/60">Loading history...</p>
+                ) : historyError ? (
+                  <p className="text-sm text-[var(--warn)]">{historyError}</p>
+                ) : history.length === 0 ? (
+                  <p className="text-sm text-black/60">
+                    No captures yet. Use Capture Snapshot to save the current metrics for this user.
+                  </p>
+                ) : (
+                  <div className="overflow-hidden rounded-[1.25rem] border border-[var(--line)]">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-white/8">
+                        <tr>
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                            Time
+                          </th>
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                            Status
+                          </th>
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                            Confidence
+                          </th>
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                            Eye
+                          </th>
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                            Blink
+                          </th>
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                            Tilt
+                          </th>
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                            Reaction
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {history.map((item) => (
+                          <tr className="border-t border-[var(--line)]" key={item.id}>
+                            <td className="px-3 py-3 text-black/72">
+                              {new Date(item.created_at).toLocaleString()}
+                            </td>
+                            <td className="px-3 py-3 text-black/80">{item.status}</td>
+                            <td className="px-3 py-3 text-black/72">
+                              {Math.round(item.confidence * 100)}%
+                            </td>
+                            <td className="px-3 py-3 text-black/72">
+                              {Math.round(item.eye_closure * 100)}%
+                            </td>
+                            <td className="px-3 py-3 text-black/72">
+                              {item.blink_rate.toFixed(1)}
+                            </td>
+                            <td className="px-3 py-3 text-black/72">
+                              {item.head_tilt.toFixed(2)}
+                            </td>
+                            <td className="px-3 py-3 text-black/72">
+                              {item.reaction_time.toFixed(2)}s
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
