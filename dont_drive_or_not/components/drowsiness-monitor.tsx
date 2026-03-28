@@ -1331,7 +1331,7 @@ export default function DrowsinessMonitor({
                 </p>
                 <div className="mt-2 flex items-center gap-3">
                   <h1 className="text-2xl font-semibold tracking-[-0.03em] text-slate-950 sm:text-3xl">
-                    Drive Awake Monitor
+                    Drive or Not?
                   </h1>
                   <DialogTrigger asChild>
                     <button

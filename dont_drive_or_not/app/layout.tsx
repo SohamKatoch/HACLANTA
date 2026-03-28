@@ -14,7 +14,7 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Drive Awake Monitor",
+  title: "Drive or Not?",
   description:
     "Browser-based drowsiness screening starter with a pluggable Flask analyzer.",
 };
