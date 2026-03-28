@@ -7,7 +7,33 @@ This repo now has:
 - `supabase/schema.sql`: `user_data`, `feature_log`, `reaction_tests` (numeric data only)
 - `docs/learnings/`: architecture notes (`LEARNINGS.md`) and pitfalls (`MISTAKES.md`)
 
-## 1) Run Flask API
+## Quick Start With Docker
+
+Use this if you want to run the app with the frontend inside a container.
+
+```powershell
+cd dont_drive_or_not
+docker build -t drive-awake-monitor .
+docker run --rm -p 3000:3000 drive-awake-monitor
+```
+
+Then open `http://localhost:3000` and allow camera access in the browser.
+
+If you also want the containerized frontend to call the Flask API running on your machine:
+
+```powershell
+docker run --rm -p 3000:3000 -e FLASK_API_URL=http://host.docker.internal:5000 drive-awake-monitor
+```
+
+## Quick Start Without Docker
+
+If you want to run everything locally without Docker:
+
+1. Start the Flask API.
+2. Start the Next.js frontend.
+3. Open `http://localhost:3000`.
+
+### Flask API
 
 **Linux / macOS**
 
@@ -34,7 +60,58 @@ python app.py
 Flask runs at `http://127.0.0.1:5000`.
 If you want Supabase logging, set `SUPABASE_URL` and your server-side `SUPABASE_KEY` in `api/.env`.
 
-## 2) Run Next.js frontend
+### Next.js Frontend
+
+**Linux / macOS**
+
+```bash
+cd dont_drive_or_not
+npm install
+npm run dev
+```
+
+**Windows**
+
+```powershell
+cd dont_drive_or_not
+npm install
+npm run dev
+```
+
+Next runs at `http://localhost:3000`.
+
+The frontend calls `fetch('/api/analyze')`, and the Next route in `dont_drive_or_not/app/api/analyze/route.ts` can proxy to `FLASK_API_URL`.
+
+## Detailed Local Setup
+
+### 1) Run Flask API
+
+**Linux / macOS**
+
+```bash
+cd api
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python app.py
+```
+
+**Windows (PowerShell)**
+
+```powershell
+cd api
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
+python app.py
+```
+
+Flask runs at `http://127.0.0.1:5000`.
+If you want Supabase logging, set `SUPABASE_URL` and your server-side `SUPABASE_KEY` in `api/.env`.
+
+### 2) Run Next.js frontend
 
 **Linux / macOS**
 

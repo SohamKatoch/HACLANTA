@@ -1106,24 +1106,88 @@ export default function DrowsinessMonitor({
     : captureButtonEnabled
       ? "Ready to capture"
       : reactionLabel;
-  const confidenceHistory = useMemo(
-    () =>
-      [...history]
-        .sort(
-          (left, right) =>
-            new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
-        )
-        .map((item) => ({
-          id: `${item.id}-${item.created_at}`,
-          confidence: Math.round(item.confidence * 100),
-          label: new Date(item.created_at).toLocaleDateString(undefined, {
+  const confidenceHistory = useMemo(() => {
+    const groupedHistory = new Map<
+      string,
+      {
+        fullLabel: string;
+        id: string;
+        label: string;
+        points: Array<{
+          confidence: number;
+          fullLabel: string;
+          id: string;
+        }>;
+        subLabel: string;
+      }
+    >();
+
+    [...history]
+      .sort(
+        (left, right) =>
+          new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+      )
+      .forEach((item, index) => {
+        const createdAt = new Date(item.created_at);
+        const groupKey = [
+          createdAt.getFullYear(),
+          createdAt.getMonth(),
+          createdAt.getDate(),
+          createdAt.getHours(),
+          createdAt.getMinutes(),
+        ].join("-");
+        const existingGroup = groupedHistory.get(groupKey) ?? {
+          id: groupKey,
+          label: createdAt.toLocaleTimeString(undefined, {
+            hour: "numeric",
+            minute: "2-digit",
+          }),
+          subLabel: createdAt.toLocaleDateString(undefined, {
             month: "short",
             day: "numeric",
           }),
-          fullLabel: new Date(item.created_at).toLocaleString(),
-        })),
-    [history],
-  );
+          fullLabel: createdAt.toLocaleString(),
+          points: [],
+        };
+
+        existingGroup.points.push({
+          id: `${item.id}-${item.created_at}-${index}`,
+          confidence: Math.round(item.confidence * 100),
+          fullLabel: createdAt.toLocaleString(),
+        });
+        groupedHistory.set(groupKey, existingGroup);
+      });
+
+    const groups = [...groupedHistory.values()];
+    const groupSpan = 690 - 54;
+    const labelStep = groups.length > 6 ? Math.ceil(groups.length / 6) : 1;
+
+    const plottedGroups = groups.map((group, index) => ({
+      ...group,
+      x: groups.length === 1 ? 372 : 54 + (index / (groups.length - 1)) * groupSpan,
+      showLabel:
+        groups.length <= 6 ||
+        index === 0 ||
+        index === groups.length - 1 ||
+        index % labelStep === 0,
+    }));
+
+    const points = plottedGroups.flatMap((group) =>
+      group.points.map((point) => ({
+        ...point,
+        label: group.label,
+        subLabel: group.subLabel,
+        x: group.x,
+        y: 20 + ((100 - point.confidence) / 100) * 180,
+      })),
+    );
+
+    return {
+      groups: plottedGroups,
+      points,
+      recentPoints: [...points].slice(-3).reverse(),
+    };
+  }, [history]);
   const profileInitials = (sessionName || sessionEmail || "Driver")
     .split(/[\s@._-]+/)
     .filter(Boolean)
@@ -1527,7 +1591,7 @@ export default function DrowsinessMonitor({
                   </span>
                 </AccordionTrigger>
                 <AccordionContent>
-                  {confidenceHistory.length === 0 ? (
+                  {confidenceHistory.points.length === 0 ? (
                     <p className="text-sm text-slate-600">
                       Capture a few readings and the confidence line graph will appear here.
                     </p>
@@ -1565,17 +1629,45 @@ export default function DrowsinessMonitor({
                               </g>
                             );
                           })}
-                          {confidenceHistory.length > 1 ? (
+                          {confidenceHistory.groups.map((group) => (
+                            <g key={group.id}>
+                              <line
+                                stroke="rgba(148,163,184,0.2)"
+                                strokeWidth="1"
+                                x1={group.x}
+                                x2={group.x}
+                                y1="20"
+                                y2="200"
+                              />
+                              {group.showLabel ? (
+                                <>
+                                  <text
+                                    fill="#0f172a"
+                                    fontSize="11"
+                                    textAnchor="middle"
+                                    x={group.x}
+                                    y={218}
+                                  >
+                                    {group.label}
+                                  </text>
+                                  <text
+                                    fill="#94a3b8"
+                                    fontSize="10"
+                                    textAnchor="middle"
+                                    x={group.x}
+                                    y={231}
+                                  >
+                                    {group.subLabel}
+                                  </text>
+                                </>
+                              ) : null}
+                            </g>
+                          ))}
+                          {confidenceHistory.points.length > 1 ? (
                             <polyline
                               fill="none"
-                              points={confidenceHistory
-                                .map((point, index) => {
-                                  const x =
-                                    54 +
-                                    (index / (confidenceHistory.length - 1)) * (690 - 54);
-                                  const y = 20 + ((100 - point.confidence) / 100) * 180;
-                                  return `${x},${y}`;
-                                })
+                              points={confidenceHistory.points
+                                .map((point) => `${point.x},${point.y}`)
                                 .join(" ")}
                               stroke="#1f7a4f"
                               strokeLinecap="round"
@@ -1583,33 +1675,18 @@ export default function DrowsinessMonitor({
                               strokeWidth="4"
                             />
                           ) : null}
-                          {confidenceHistory.map((point, index) => {
-                            const x =
-                              confidenceHistory.length === 1
-                                ? 372
-                                : 54 + (index / (confidenceHistory.length - 1)) * (690 - 54);
-                            const y = 20 + ((100 - point.confidence) / 100) * 180;
-
+                          {confidenceHistory.points.map((point) => {
                             return (
                               <g key={point.id}>
-                                <circle cx={x} cy={y} fill="rgba(31,122,79,0.15)" r="11" />
-                                <circle cx={x} cy={y} fill="#1f7a4f" r="6" />
-                                <text
-                                  fill="#0f172a"
-                                  fontSize="11"
-                                  textAnchor="middle"
-                                  x={x}
-                                  y={218}
-                                >
-                                  {point.label}
-                                </text>
+                                <circle cx={point.x} cy={point.y} fill="rgba(31,122,79,0.15)" r="11" />
+                                <circle cx={point.x} cy={point.y} fill="#1f7a4f" r="6" />
                               </g>
                             );
                           })}
                         </svg>
                       </div>
                       <div className="grid gap-2 sm:grid-cols-3">
-                        {confidenceHistory.slice(-3).reverse().map((point) => (
+                        {confidenceHistory.recentPoints.map((point) => (
                           <Card
                             className="rounded-xl border-slate-200 bg-slate-50 shadow-none"
                             key={point.id}

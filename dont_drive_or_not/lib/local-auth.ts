@@ -73,6 +73,10 @@ function getStoredAccounts() {
   }
 }
 
+export function getLocalAccounts() {
+  return getStoredAccounts();
+}
+
 function storeAccounts(accounts: LocalAccount[]) {
   if (typeof window === "undefined") {
     return;
