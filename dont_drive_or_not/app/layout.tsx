@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import PhoneShell from "@/components/phone-shell";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -19,6 +20,13 @@ export const metadata: Metadata = {
     "Browser-based drowsiness screening starter with a pluggable Flask analyzer.",
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#08090e",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -29,7 +37,9 @@ export default function RootLayout({
       lang="en"
       className={`${spaceGrotesk.variable} ${ibmPlexMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="flex min-h-full flex-col">
+        <PhoneShell>{children}</PhoneShell>
+      </body>
     </html>
   );
 }

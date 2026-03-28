@@ -60,22 +60,22 @@ export default function LoginForm({ mode }: Readonly<LoginFormProps>) {
   }
 
   return (
-    <Card className="rounded-[2rem] bg-[var(--panel-strong)]">
-      <CardHeader className="gap-3">
-        <p className="font-mono text-xs uppercase tracking-[0.3em] text-black/45">
+    <Card className="rounded-[1.65rem] border border-[var(--line)]/50 bg-[var(--panel-strong)] sm:rounded-[2rem]">
+      <CardHeader className="gap-2 p-4 sm:gap-3 sm:p-6">
+        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-black/45 sm:text-xs sm:tracking-[0.3em]">
           Drive Awake Access
         </p>
-        <CardTitle className="text-4xl tracking-[-0.04em]">
+        <CardTitle className="text-2xl tracking-[-0.03em] sm:text-3xl">
           {isLogin ? "Log in to open the monitor." : "Create an account for the monitor."}
         </CardTitle>
-        <CardDescription className="max-w-xl text-base leading-7">
+        <CardDescription className="max-w-xl text-sm leading-relaxed sm:text-base sm:leading-7">
           {isLogin
             ? "Enter the same email, password, and VIN you used when creating the local account."
             : "This is a lightweight local account flow for now. Email, password, and VIN are stored only in this browser until real auth is added."}
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <form className="grid gap-5" onSubmit={handleSubmit}>
+      <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
+        <form className="grid gap-4 sm:gap-5" onSubmit={handleSubmit}>
           <label className="grid gap-2 text-sm text-black/65">
             <span>Email</span>
             <input
@@ -114,11 +114,11 @@ export default function LoginForm({ mode }: Readonly<LoginFormProps>) {
 
           {error ? <p className="text-sm text-[var(--risk)]">{error}</p> : null}
 
-          <div className="flex flex-wrap gap-3 pt-2">
-            <Button size="lg" type="submit">
+          <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:flex-wrap sm:gap-3">
+            <Button className="w-full sm:w-auto" size="lg" type="submit">
               {isLogin ? "Log In" : "Create Account"}
             </Button>
-            <Button asChild size="lg" variant="secondary">
+            <Button asChild className="w-full sm:w-auto" size="lg" variant="secondary">
               <Link href="/">Back To Landing</Link>
             </Button>
           </div>

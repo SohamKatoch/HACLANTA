@@ -20,51 +20,51 @@ const highlights = [
 
 export default function Home() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-6 sm:px-8 lg:px-10">
-      <section className="relative overflow-hidden rounded-[2rem] border border-[var(--line)] bg-[var(--panel-strong)] p-6 shadow-[0_25px_80px_rgba(80,48,24,0.12)] backdrop-blur-xl sm:p-8">
-        <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)]/50 to-transparent" />
+    <main className="flex w-full flex-col gap-4 py-2 sm:py-3">
+      <section className="relative overflow-hidden rounded-[1.65rem] border border-[var(--line)]/60 bg-[var(--panel-strong)] p-4 shadow-[0_20px_50px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:rounded-[2rem] sm:p-6">
+        <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)]/45 to-transparent sm:inset-x-8" />
 
-        <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="space-y-6">
-            <Badge className="px-4 py-2 text-xs tracking-[0.25em]" variant="outline">
-              Hacklanta Starter
-            </Badge>
+        <div className="flex flex-col gap-6">
+          <Badge
+            className="w-fit px-3 py-1.5 text-[10px] tracking-[0.22em] sm:px-4 sm:py-2 sm:text-xs sm:tracking-[0.25em]"
+            variant="outline"
+          >
+            Hacklanta Starter
+          </Badge>
 
-            <div className="space-y-4">
-              <h1 className="max-w-4xl text-5xl font-semibold tracking-[-0.06em] text-black sm:text-6xl">
-                Know if the driver is safe before the car moves.
-              </h1>
-              <p className="max-w-2xl text-lg leading-8 text-black/65">
-                Drive Awake pairs browser-side drowsiness signals with a Flask
-                analysis layer, so we can onboard users with a clean product flow
-                today and swap in stronger AI later.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <Button asChild size="lg">
-                <Link href="/signup">Create Account</Link>
-              </Button>
-              <Button asChild size="lg" variant="secondary">
-                <Link href="/login">Open Login</Link>
-              </Button>
-              <Button asChild size="lg" variant="outline">
-                <Link href="/monitor">Go To Monitor</Link>
-              </Button>
-            </div>
+          <div className="space-y-3">
+            <h1 className="text-2xl font-semibold tracking-[-0.04em] text-black sm:text-3xl">
+              Know if the driver is safe before the car moves.
+            </h1>
+            <p className="text-sm leading-relaxed text-black/65 sm:text-base sm:leading-7">
+              Drive Awake pairs browser-side drowsiness signals with a Flask analysis layer—built
+              for a phone-first flow today, model-ready for tomorrow.
+            </p>
           </div>
 
-          <div className="grid gap-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Button asChild className="w-full sm:w-auto" size="lg">
+              <Link href="/signup">Create Account</Link>
+            </Button>
+            <Button asChild className="w-full sm:w-auto" size="lg" variant="secondary">
+              <Link href="/login">Open Login</Link>
+            </Button>
+            <Button asChild className="w-full sm:w-auto" size="lg" variant="outline">
+              <Link href="/monitor">Go To Monitor</Link>
+            </Button>
+          </div>
+
+          <div className="grid gap-3">
             {highlights.map((item) => (
               <Card
-                className="rounded-[1.7rem] bg-[#1d1712] text-white shadow-[0_20px_50px_rgba(40,24,12,0.28)]"
+                className="rounded-xl bg-[#1d1712] text-white shadow-[0_16px_40px_rgba(40,24,12,0.35)] sm:rounded-[1.35rem]"
                 key={item.label}
               >
-                <CardContent className="p-6">
-                  <p className="font-mono text-xs uppercase tracking-[0.25em] text-white/55">
+                <CardContent className="p-4 sm:p-5">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/55 sm:text-xs sm:tracking-[0.25em]">
                     {item.label}
                   </p>
-                  <p className="mt-3 text-2xl font-semibold leading-8 tracking-[-0.03em]">
+                  <p className="mt-2 text-lg font-semibold leading-snug tracking-[-0.02em] sm:mt-3 sm:text-xl sm:leading-8">
                     {item.value}
                   </p>
                 </CardContent>

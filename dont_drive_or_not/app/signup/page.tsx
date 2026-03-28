@@ -2,7 +2,7 @@ import LoginForm from "@/components/login-form";
 
 export default function SignupPage() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl items-center px-5 py-8 sm:px-8">
+    <main className="flex w-full flex-col justify-center py-6 sm:py-10">
       <LoginForm mode="signup" />
     </main>
   );

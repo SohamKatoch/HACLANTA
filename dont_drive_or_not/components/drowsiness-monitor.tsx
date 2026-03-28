@@ -9,6 +9,13 @@ import {
   type DrowsinessAssessment,
   type DrowsinessFeatures,
 } from "@/lib/drowsiness";
+import {
+  computeFaceGeometry,
+  createFaceLandmarker,
+  earToEyeClosure,
+  type FaceLandmarkerInstance,
+  type VisionEngine,
+} from "@/lib/face-vision";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -192,11 +199,15 @@ function MetricCard({
   tone: string;
 }) {
   return (
-    <Card className="rounded-[1.6rem] backdrop-blur-sm">
-      <CardContent className="p-5">
-        <p className="text-xs uppercase tracking-[0.25em] text-black/45">{label}</p>
-        <p className={`mt-3 text-3xl font-semibold ${tone}`}>{value}</p>
-        <p className="mt-2 text-sm leading-6 text-black/55">{hint}</p>
+    <Card className="rounded-xl backdrop-blur-sm sm:rounded-[1.35rem]">
+      <CardContent className="p-3 sm:p-5">
+        <p className="text-[10px] uppercase tracking-[0.2em] text-black/45 sm:text-xs sm:tracking-[0.25em]">
+          {label}
+        </p>
+        <p className={`mt-2 text-2xl font-semibold sm:mt-3 sm:text-3xl ${tone}`}>{value}</p>
+        <p className="mt-1.5 text-[11px] leading-snug text-black/55 sm:mt-2 sm:text-sm sm:leading-6">
+          {hint}
+        </p>
       </CardContent>
     </Card>
   );
@@ -211,6 +222,7 @@ export default function DrowsinessMonitor({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const faceLandmarkerRef = useRef<FaceLandmarkerInstance | null>(null);
   const reactionCueTimeoutRef = useRef<number | null>(null);
   const reactionExpireTimeoutRef = useRef<number | null>(null);
   const reactionStartedAtRef = useRef<number | null>(null);
@@ -242,6 +254,7 @@ export default function DrowsinessMonitor({
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [visionEngine, setVisionEngine] = useState<VisionEngine>("heuristic");
 
   function applySession(session: AppSession) {
     setSessionName(session.name);
@@ -373,6 +386,91 @@ export default function DrowsinessMonitor({
     context.drawImage(video, 0, 0, frameWidth, frameHeight);
     const { data } = context.getImageData(0, 0, frameWidth, frameHeight);
 
+    const fullFrame = analyzeRegion(
+      data,
+      frameWidth,
+      frameHeight,
+      0,
+      frameWidth,
+      0,
+      frameHeight,
+    );
+    const brightness = clamp(fullFrame.mean / 255);
+
+    if ((stage === "calibrating" || stage === "active") && visionEngine === "loading") {
+      setReactionLabel("Loading MediaPipe face model…");
+      setMetrics((current) => ({
+        ...current,
+        brightness: Number(smooth(current.brightness, brightness, 0.2).toFixed(3)),
+      }));
+      return;
+    }
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const landmarker = faceLandmarkerRef.current;
+
+    if (landmarker && vw > 0 && vh > 0) {
+      const detection = landmarker.detectForVideo(video, performance.now());
+      const landmarks = detection.faceLandmarks?.[0];
+
+      if (landmarks?.length) {
+        const geom = computeFaceGeometry(landmarks, vw, vh);
+        const eyeOpenness = geom.earAvg * 100;
+
+        if (baselineOpennessRef.current === null) {
+          calibrationSamplesRef.current = [...calibrationSamplesRef.current, geom.earAvg];
+
+          if (calibrationSamplesRef.current.length >= CALIBRATION_FRAMES) {
+            baselineOpennessRef.current = average(calibrationSamplesRef.current);
+            setStage("active");
+            setReactionLabel("Calibration complete. Monitoring is live.");
+          } else {
+            setReactionLabel(
+              `Calibrating EAR baseline ${calibrationSamplesRef.current.length}/${CALIBRATION_FRAMES}.`,
+            );
+          }
+        }
+
+        const baselineEar = baselineOpennessRef.current ?? geom.earAvg;
+        const rawEyeClosure = earToEyeClosure(geom.earAvg, baselineEar);
+
+        if (rawEyeClosure >= 0.62 && !blinkClosedRef.current) {
+          blinkClosedRef.current = true;
+        } else if (rawEyeClosure <= 0.28 && blinkClosedRef.current) {
+          blinkClosedRef.current = false;
+          blinkTimestampsRef.current = [...blinkTimestampsRef.current, Date.now()];
+        }
+
+        const sixtySecondsAgo = Date.now() - 60_000;
+        blinkTimestampsRef.current = blinkTimestampsRef.current.filter(
+          (timestamp) => timestamp >= sixtySecondsAgo,
+        );
+
+        setMetrics((current) => ({
+          eyeClosure: Number(smooth(current.eyeClosure, rawEyeClosure).toFixed(3)),
+          blinkRate: Number(
+            smooth(current.blinkRate, blinkTimestampsRef.current.length, 0.3).toFixed(2),
+          ),
+          headTilt: Number(smooth(current.headTilt, geom.headTiltDeg).toFixed(2)),
+          reactionTime: current.reactionTime,
+          brightness: Number(smooth(current.brightness, brightness, 0.2).toFixed(3)),
+          eyeOpenness: Number(smooth(current.eyeOpenness, eyeOpenness, 0.25).toFixed(3)),
+        }));
+
+        return;
+      }
+
+      if (visionEngine === "mediapipe") {
+        setReactionLabel("Align your face in the frame…");
+        setMetrics((current) => ({
+          ...current,
+          brightness: Number(smooth(current.brightness, brightness, 0.2).toFixed(3)),
+        }));
+        return;
+      }
+    }
+
     const leftEye = analyzeRegion(
       data,
       frameWidth,
@@ -391,15 +489,6 @@ export default function DrowsinessMonitor({
       frameHeight * 0.18,
       frameHeight * 0.4,
     );
-    const fullFrame = analyzeRegion(
-      data,
-      frameWidth,
-      frameHeight,
-      0,
-      frameWidth,
-      0,
-      frameHeight,
-    );
 
     const eyeOpenness = (leftEye.stdDev + rightEye.stdDev) / 2;
 
@@ -412,7 +501,7 @@ export default function DrowsinessMonitor({
         setReactionLabel("Calibration complete. Monitoring is live.");
       } else {
         setReactionLabel(
-          `Calibrating baseline ${calibrationSamplesRef.current.length}/${CALIBRATION_FRAMES}.`,
+          `Calibrating contrast baseline ${calibrationSamplesRef.current.length}/${CALIBRATION_FRAMES}.`,
         );
       }
     }
@@ -435,7 +524,6 @@ export default function DrowsinessMonitor({
     const eyeSeparation = frameWidth * 0.4;
     const verticalDelta = rightEye.darkCentroidY - leftEye.darkCentroidY;
     const headTilt = Math.abs((Math.atan2(verticalDelta, eyeSeparation) * 180) / Math.PI);
-    const brightness = clamp(fullFrame.mean / 255);
 
     setMetrics((current) => ({
       eyeClosure: Number(smooth(current.eyeClosure, rawEyeClosure).toFixed(3)),
@@ -459,7 +547,8 @@ export default function DrowsinessMonitor({
       reaction_time: Number(metrics.reactionTime.toFixed(2)),
       session_id: sessionIdRef.current,
       captured_at: new Date().toISOString(),
-      feature_source: "browser-heuristic-v1",
+      feature_source:
+        visionEngine === "mediapipe" ? "mediapipe-ear-v1" : "browser-heuristic-v1",
       user_id: sessionUserId || undefined,
       display_name: sessionName,
       source: "dont-drive-or-not",
@@ -555,7 +644,8 @@ export default function DrowsinessMonitor({
       reaction_time: Number(metrics.reactionTime.toFixed(2)),
       session_id: sessionIdRef.current,
       captured_at: new Date().toISOString(),
-      feature_source: "browser-heuristic-v1",
+      feature_source:
+        visionEngine === "mediapipe" ? "mediapipe-ear-v1" : "browser-heuristic-v1",
       user_id: activeSession.userId,
       display_name: activeSession.name,
       source: "dont-drive-or-not",
@@ -690,6 +780,36 @@ export default function DrowsinessMonitor({
     };
   }, []);
 
+  const visionSessionActive = stage === "calibrating" || stage === "active";
+
+  useEffect(() => {
+    if (!visionSessionActive) {
+      faceLandmarkerRef.current?.close();
+      faceLandmarkerRef.current = null;
+      setVisionEngine("heuristic");
+      return;
+    }
+
+    let cancelled = false;
+    setVisionEngine("loading");
+
+    void (async () => {
+      const lm = await createFaceLandmarker();
+      if (cancelled) {
+        lm?.close();
+        return;
+      }
+      faceLandmarkerRef.current = lm;
+      setVisionEngine(lm ? "mediapipe" : "heuristic");
+    })();
+
+    return () => {
+      cancelled = true;
+      faceLandmarkerRef.current?.close();
+      faceLandmarkerRef.current = null;
+    };
+  }, [visionSessionActive]);
+
   async function startMonitoring() {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setCameraError("This browser does not support webcam access.");
@@ -763,8 +883,8 @@ export default function DrowsinessMonitor({
 
   if (!sessionReady) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-4xl items-center justify-center px-6">
-        <div className="rounded-full border border-[var(--line)] bg-white/70 px-5 py-3 font-mono text-xs uppercase tracking-[0.25em] text-black/55">
+      <main className="flex min-h-[40dvh] w-full items-center justify-center py-8">
+        <div className="rounded-full border border-[var(--line)] bg-white/10 px-5 py-3 font-mono text-xs uppercase tracking-[0.25em] text-white/55">
           Preparing Session
         </div>
       </main>
@@ -772,55 +892,59 @@ export default function DrowsinessMonitor({
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-6 sm:px-8 lg:px-10">
-      <Card className="relative overflow-hidden rounded-[2rem] bg-[var(--panel-strong)] p-6 shadow-[0_25px_80px_rgba(80,48,24,0.12)] backdrop-blur-xl sm:p-8">
-        <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)]/50 to-transparent" />
+    <main className="flex w-full flex-col py-2 sm:py-3">
+      <Card className="relative overflow-hidden rounded-[1.65rem] border border-[var(--line)]/60 bg-[var(--panel-strong)] p-4 shadow-[0_20px_50px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:rounded-[2rem] sm:p-5">
+        <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)]/45 to-transparent sm:inset-x-8" />
 
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[1.4rem] border border-[var(--line)] bg-white/60 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <Badge variant="outline">Signed In</Badge>
-            <span className="text-sm text-black/65">
+        <div className="mb-4 flex flex-col gap-3 rounded-[1.2rem] border border-[var(--line)] bg-white/50 px-3 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+            <Badge className="w-fit" variant="outline">
+              Signed In
+            </Badge>
+            <span className="truncate text-xs text-black/65 sm:text-sm">
               {sessionName ?? "Driver"}
-              {sessionEmail ? ` | ${sessionEmail}` : ""}
-              {sessionVin ? ` | VIN ${sessionVin}` : ""}
+              {sessionEmail ? ` · ${sessionEmail}` : ""}
+              {sessionVin ? ` · VIN ${sessionVin}` : ""}
             </span>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button asChild size="sm" variant="secondary">
+          <div className="flex gap-2">
+            <Button asChild className="flex-1 sm:flex-none" size="sm" variant="secondary">
               <Link href="/">Home</Link>
             </Button>
-            <Button onClick={handleSignOut} size="sm" variant="outline">
+            <Button className="flex-1 sm:flex-none" onClick={handleSignOut} size="sm" variant="outline">
               Sign Out
             </Button>
           </div>
         </div>
 
-        <div className="grid gap-8 lg:grid-cols-[1.25fr_0.9fr]">
-          <div className="space-y-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="max-w-2xl">
-                <p className="font-mono text-xs uppercase tracking-[0.35em] text-black/45">
-                  Browser Heuristic Starter
+        <div className="flex flex-col gap-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-black/45 sm:text-xs sm:tracking-[0.35em]">
+                  {visionEngine === "mediapipe"
+                    ? "MediaPipe · face landmarks · EAR"
+                    : visionEngine === "loading"
+                      ? "Loading vision model…"
+                      : "Heuristic vision fallback"}
                 </p>
-                <h1 className="mt-3 max-w-3xl text-4xl font-semibold tracking-[-0.04em] text-black sm:text-5xl">
+                <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-black sm:text-3xl">
                   Drive Awake Monitor
                 </h1>
-                <p className="mt-4 max-w-2xl text-base leading-7 text-black/65 sm:text-lg">
-                  Live webcam capture, lightweight feature extraction, reaction testing,
-                  and a stable analyzer contract ready for a future Python model.
+                <p className="mt-2 max-w-xl text-sm leading-6 text-black/60">
+                  Live face mesh, EAR, blinks, head tilt, and reaction checks—optimized for a phone-sized layout.
                 </p>
               </div>
 
               <Badge
-                className="px-4 py-2 text-xs tracking-[0.25em]"
+                className="shrink-0 self-start px-3 py-1.5 text-[10px] tracking-[0.2em] sm:px-4 sm:py-2 sm:text-xs sm:tracking-[0.25em]"
                 variant={stageBadgeVariant}
               >
                 {stageLabel}
               </Badge>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-[1.45fr_0.9fr]">
-              <Card className="relative overflow-hidden rounded-[1.8rem] bg-[#171411]">
+            <div className="flex flex-col gap-4">
+              <Card className="relative overflow-hidden rounded-[1.35rem] bg-[#171411] sm:rounded-[1.65rem]">
                 <video
                   ref={videoRef}
                   autoPlay
@@ -830,24 +954,32 @@ export default function DrowsinessMonitor({
                 />
                 <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.1),transparent_30%,transparent_70%,rgba(0,0,0,0.16))]" />
                 <div className="pointer-events-none absolute inset-0 bg-[repeating-linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.03)_2px,transparent_2px,transparent_8px)] opacity-30" />
-                <div className="absolute left-4 top-4 rounded-full bg-black/45 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.25em] text-white/85">
-                  Webcam
+                <div className="absolute left-2 top-2 flex flex-wrap gap-1.5 sm:left-4 sm:top-4 sm:gap-2">
+                  <div className="rounded-full bg-black/50 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.2em] text-white/85 sm:px-3 sm:py-2 sm:text-[11px] sm:tracking-[0.25em]">
+                    Webcam
+                  </div>
+                  <div className="rounded-full bg-black/50 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.2em] text-white/85 sm:px-3 sm:py-2 sm:text-[11px] sm:tracking-[0.25em]">
+                    {visionEngine === "mediapipe"
+                      ? "MediaPipe"
+                      : visionEngine === "loading"
+                        ? "Vision…"
+                        : "Heuristic"}
+                  </div>
                 </div>
-                <div className="absolute bottom-4 left-4 right-4 rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white/82 backdrop-blur-sm">
-                  No frames are stored. This starter only works with ephemeral browser-side
-                  metrics.
+                <div className="absolute bottom-2 left-2 right-2 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[11px] leading-snug text-white/82 backdrop-blur-sm sm:bottom-4 sm:left-4 sm:right-4 sm:rounded-2xl sm:px-4 sm:py-3 sm:text-sm">
+                  No frames stored—only live metrics in your browser.
                 </div>
               </Card>
 
-              <Card className="rounded-[1.8rem]">
-                <CardHeader className="p-5 pb-0">
-                  <p className="font-mono text-xs uppercase tracking-[0.3em] text-black/45">
+              <Card className="rounded-[1.35rem] sm:rounded-[1.65rem]">
+                <CardHeader className="p-4 pb-0 sm:p-5">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-black/45 sm:text-xs sm:tracking-[0.3em]">
                     Reaction Test
                   </p>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-4 p-5">
+                <CardContent className="flex flex-col gap-3 p-4 sm:gap-4 sm:p-5">
                   <Button
-                    className="min-h-44 rounded-[1.5rem] text-center text-lg font-semibold"
+                    className="min-h-[10.5rem] rounded-[1.25rem] text-center text-base font-semibold sm:min-h-44 sm:rounded-[1.5rem] sm:text-lg"
                     onClick={() => handleReactionPad()}
                     variant={reactionCueVisible ? "accent" : "secondary"}
                     size="lg"
@@ -856,23 +988,23 @@ export default function DrowsinessMonitor({
                     {reactionCueVisible ? "Tap Now" : "Waiting for Cue"}
                   </Button>
                   <p className="text-sm leading-6 text-black/60">{reactionLabel}</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Card className="rounded-2xl border-0 bg-white/70 shadow-none">
-                      <CardContent className="p-4">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-black/40">
+                  <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                    <Card className="rounded-xl border-0 bg-white/70 shadow-none sm:rounded-2xl">
+                      <CardContent className="p-3 sm:p-4">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-black/40 sm:text-[11px] sm:tracking-[0.25em]">
                           Last
                         </p>
-                        <p className="mt-2 text-2xl font-semibold text-black">
+                        <p className="mt-1 text-xl font-semibold text-black sm:mt-2 sm:text-2xl">
                           {lastReactionTime ? `${lastReactionTime.toFixed(2)}s` : "--"}
                         </p>
                       </CardContent>
                     </Card>
-                    <Card className="rounded-2xl border-0 bg-white/70 shadow-none">
-                      <CardContent className="p-4">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-black/40">
+                    <Card className="rounded-xl border-0 bg-white/70 shadow-none sm:rounded-2xl">
+                      <CardContent className="p-3 sm:p-4">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-black/40 sm:text-[11px] sm:tracking-[0.25em]">
                           Rolling
                         </p>
-                        <p className="mt-2 text-2xl font-semibold text-black">
+                        <p className="mt-1 text-xl font-semibold text-black sm:mt-2 sm:text-2xl">
                           {metrics.reactionTime.toFixed(2)}s
                         </p>
                       </CardContent>
@@ -882,14 +1014,16 @@ export default function DrowsinessMonitor({
               </Card>
             </div>
 
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Button
+                className="w-full sm:w-auto"
                 onClick={() => void startMonitoring()}
                 type="button"
               >
                 {stage === "idle" || stage === "error" ? "Start Monitoring" : "Restart Session"}
               </Button>
               <Button
+                className="w-full sm:w-auto"
                 onClick={() => void captureCurrentSnapshot()}
                 type="button"
                 variant="accent"
@@ -897,6 +1031,7 @@ export default function DrowsinessMonitor({
                 {capturePending ? "Capturing Snapshot" : "Capture Snapshot"}
               </Button>
               <Button
+                className="w-full sm:w-auto"
                 onClick={stopMonitoring}
                 variant="secondary"
                 type="button"
@@ -906,31 +1041,37 @@ export default function DrowsinessMonitor({
             </div>
 
             {(cameraError || submissionError || captureNotice) && (
-              <Alert>
+              <Alert className="rounded-xl sm:rounded-2xl">
                 <AlertTitle>Monitor Notice</AlertTitle>
                 <AlertDescription>
                   {cameraError ?? submissionError ?? captureNotice}
                 </AlertDescription>
               </Alert>
             )}
-          </div>
 
-          <div className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4">
               <MetricCard
-                hint="Approximate closure based on eye-region contrast."
+                hint={
+                  visionEngine === "mediapipe"
+                    ? "Drowsiness proxy from Eye Aspect Ratio vs your calibrated open-eye baseline."
+                    : "Approximate closure from eye-region luminance contrast (no face model)."
+                }
                 label="Eye Closure"
                 tone={metricTone(metrics.eyeClosure, "direct")}
                 value={formatPercent(metrics.eyeClosure)}
               />
               <MetricCard
-                hint="Blink events counted across the last 60 seconds."
+                hint="Full blink cycles (eye closed → open) in the last 60 seconds."
                 label="Blink Rate"
                 tone={metricTone(metrics.blinkRate / 32, "direct")}
                 value={`${metrics.blinkRate.toFixed(1)}/min`}
               />
               <MetricCard
-                hint="Estimated tilt from relative eye-band alignment."
+                hint={
+                  visionEngine === "mediapipe"
+                    ? "Head roll from the outer eye-corner line vs horizontal (landmark geometry)."
+                    : "Tilt estimated from dark-centroid alignment in fixed eye ROIs."
+                }
                 label="Head Tilt"
                 tone={metricTone(metrics.headTilt / 25, "direct")}
                 value={`${metrics.headTilt.toFixed(1)} deg`}
@@ -943,28 +1084,28 @@ export default function DrowsinessMonitor({
               />
             </div>
 
-            <Card className="rounded-[1.8rem]">
-              <CardHeader className="flex-row items-start justify-between gap-4">
-                <div>
-                  <p className="font-mono text-xs uppercase tracking-[0.25em] text-black/45">
+            <Card className="rounded-[1.35rem] sm:rounded-[1.65rem]">
+              <CardHeader className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:p-6">
+                <div className="min-w-0">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-black/45 sm:text-xs sm:tracking-[0.25em]">
                     Analyzer Result
                   </p>
-                  <CardTitle className={`mt-3 ${assessmentTone}`}>
+                  <CardTitle className={`mt-2 text-xl sm:mt-3 sm:text-2xl ${assessmentTone}`}>
                     {assessment?.status ?? "Awaiting data"}
                   </CardTitle>
                 </div>
-                <Card className="rounded-2xl border-0 bg-white/70 shadow-none">
-                  <CardContent className="px-4 py-3 text-right">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-black/40">
+                <Card className="shrink-0 rounded-xl border-0 bg-white/70 shadow-none sm:rounded-2xl">
+                  <CardContent className="px-3 py-2 text-right sm:px-4 sm:py-3">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-black/40 sm:text-[11px] sm:tracking-[0.2em]">
                       Confidence
                     </p>
-                    <p className="mt-1 text-2xl font-semibold text-black">
+                    <p className="mt-0.5 text-xl font-semibold text-black sm:mt-1 sm:text-2xl">
                       {assessment ? formatConfidence(assessment.confidence) : "--"}
                     </p>
                   </CardContent>
                 </Card>
               </CardHeader>
-              <CardContent>
+              <CardContent className="px-4 pb-4 pt-0 sm:px-6 sm:pb-6">
                 <Progress
                   indicatorClassName={
                     assessment?.status === "NOT SAFE" ? "bg-[var(--risk)]" : "bg-[var(--safe)]"
@@ -972,41 +1113,45 @@ export default function DrowsinessMonitor({
                   value={Number(((assessment?.score ?? 0) * 100).toFixed(0))}
                 />
 
-                <div className="mt-6 grid gap-3">
+                <div className="mt-4 grid gap-2 sm:mt-6 sm:gap-3">
                   {(assessment?.reasons ?? [
                     "Start a monitoring session to generate browser-side features and call the analysis endpoint.",
                   ]).map((reason) => (
-                    <Card className="rounded-2xl bg-white/65 shadow-none" key={reason}>
-                      <CardContent className="px-4 py-3 text-sm leading-6 text-black/62">
+                    <Card className="rounded-xl bg-white/65 shadow-none sm:rounded-2xl" key={reason}>
+                      <CardContent className="px-3 py-2.5 text-xs leading-5 text-black/62 sm:px-4 sm:py-3 sm:text-sm sm:leading-6">
                         {reason}
                       </CardContent>
                     </Card>
                   ))}
                 </div>
 
-                <div className="mt-6 flex flex-wrap gap-3">
+                <div className="mt-4 flex flex-wrap gap-2 sm:mt-6 sm:gap-3">
                   <Badge variant={providerBadgeVariant}>
                     Provider: {assessment?.provider ?? "pending"}
                   </Badge>
                   <Badge variant="outline">Brightness: {formatPercent(metrics.brightness)}</Badge>
                   <Badge variant="outline">
-                    Eye Openness Baseline:{" "}
-                    {baselineOpennessRef.current ? baselineOpennessRef.current.toFixed(1) : "--"}
+                    {visionEngine === "mediapipe" ? "EAR baseline" : "Contrast baseline"}:{" "}
+                    {baselineOpennessRef.current
+                      ? visionEngine === "mediapipe"
+                        ? baselineOpennessRef.current.toFixed(3)
+                        : baselineOpennessRef.current.toFixed(1)
+                      : "--"}
                   </Badge>
                 </div>
               </CardContent>
             </Card>
 
-            <Card className="rounded-[1.8rem]">
-              <CardHeader>
-                <p className="font-mono text-xs uppercase tracking-[0.25em] text-black/45">
+            <Card className="rounded-[1.35rem] sm:rounded-[1.65rem]">
+              <CardHeader className="space-y-1 p-4 sm:p-6">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-black/45 sm:text-xs sm:tracking-[0.25em]">
                   Capture History
                 </p>
-                <CardDescription>
-                  Captured snapshots are stored per user and listed here newest first.
+                <CardDescription className="text-xs leading-relaxed sm:text-sm">
+                  Newest captures first. Swipe horizontally on small screens.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="px-4 pb-4 sm:px-6 sm:pb-6">
                 {historyLoading ? (
                   <p className="text-sm text-black/60">Loading history...</p>
                 ) : historyError ? (
@@ -1016,8 +1161,8 @@ export default function DrowsinessMonitor({
                     No captures yet. Use Capture Snapshot to save the current metrics for this user.
                   </p>
                 ) : (
-                  <div className="overflow-hidden rounded-[1.25rem] border border-[var(--line)]">
-                    <table className="w-full text-left text-sm">
+                  <div className="-mx-1 overflow-x-auto overflow-y-hidden rounded-xl border border-[var(--line)] sm:mx-0 sm:rounded-[1.25rem]">
+                    <table className="w-full min-w-[520px] text-left text-xs sm:text-sm">
                       <thead className="bg-white/8">
                         <tr>
                           <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
@@ -1073,7 +1218,6 @@ export default function DrowsinessMonitor({
                 )}
               </CardContent>
             </Card>
-          </div>
         </div>
 
         <canvas ref={canvasRef} className="hidden" />

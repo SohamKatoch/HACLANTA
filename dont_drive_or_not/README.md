@@ -2,21 +2,24 @@
 
 Starter app for browser-based drowsiness screening with:
 
-- a Next.js frontend that captures webcam input and computes lightweight heuristic features
+- a Next.js frontend that captures webcam input and runs **MediaPipe Face Landmarker** (when the model loads) for **face landmarks**, **Eye Aspect Ratio (EAR)**, **blink** timing, and **head tilt** from eye-corner geometry
+- a **canvas heuristic fallback** if the model fails to load or the user denies GPU/WASM
 - shadcn-style UI primitives for the monitoring dashboard
 - a stable `POST /api/analyze` endpoint in Next.js
 - a separate Flask service stub that another teammate can later upgrade to a real AI/ML model
+
+The webcam still uses the browser **Media Capture API** (`getUserMedia`). **OpenCV.js** is not bundled here (large payload); server-side **Python + OpenCV** could process frames later if you move capture off the client.
 
 This version does not include a trained model. It uses threshold scoring so the app works immediately while keeping the backend contract stable.
 
 ## What It Does
 
 - Captures webcam video with `getUserMedia()`
-- Extracts lightweight browser-side features on a timer
-- Tracks eye closure proxy
-- Tracks blink rate
-- Tracks head tilt proxy
-- Tracks reaction time via a visual cue
+- Runs **MediaPipe** `FaceLandmarker` in **VIDEO** mode (WASM + model from CDN) when available
+- Derives **eye closure** from EAR vs a short per-session calibration
+- Counts **blinks** (closed→open cycles) over a rolling 60s window
+- Estimates **head tilt** (degrees) from outer eye-corner alignment
+- Tracks **reaction time** via a visual cue (unchanged)
 - Sends features to `POST /api/analyze`
 - Proxies to Flask when `FLASK_API_URL` is configured
 - Falls back to local threshold scoring if the Flask service is unavailable
@@ -32,6 +35,7 @@ components/
   ui/                     shadcn-style reusable primitives
 lib/
   drowsiness.ts           Shared scoring contract and types
+  face-vision.ts          MediaPipe init, EAR, head tilt helpers
   utils.ts                shadcn class helper
 backend/
   app.py                  Flask threshold stub
@@ -81,9 +85,11 @@ The frontend sends:
   "reaction_time": 0.52,
   "session_id": "session-abc123",
   "captured_at": "2026-03-28T15:00:00.000Z",
-  "feature_source": "browser-heuristic-v1"
+  "feature_source": "mediapipe-ear-v1"
 }
 ```
+
+`feature_source` is `mediapipe-ear-v1` when MediaPipe is active, or `browser-heuristic-v1` when the canvas fallback is used.
 
 The analyzer returns:
 
