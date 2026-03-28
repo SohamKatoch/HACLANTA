@@ -82,6 +82,47 @@ Use `host.docker.internal` so the container can reach the Flask server running o
 
 If you skip `FLASK_API_URL`, the app still runs and uses the built-in fallback scoring logic.
 
+## How To Use The App
+
+After the app is running, open `http://localhost:3000`.
+
+### Driver Flow
+
+1. Open `/signup` to create a local demo driver account.
+2. Open `/login` and sign in.
+3. Go to `/monitor`.
+4. Allow browser camera access.
+5. Start the monitor, wait for the cue, and capture readings.
+6. Review saved history and the confidence graph on the monitor page.
+
+### Admin Dashboard
+
+The insurance dashboard is available in this demo at `/admin`.
+
+Use:
+
+- username: `admin`
+- password: `1234`
+
+Inside the dashboard you can:
+
+- view the users table
+- add users
+- edit users
+- delete users from the admin view
+- reset user thresholds
+- review profile metrics
+- review alert history
+- flag events as `correct` or `false positive`
+- send a dangerous-driving notification to a selected driver
+- use the top snarky summary card for demo narration
+
+Important demo note:
+
+- the dashboard reads backend data when `FLASK_API_URL` is configured and the Flask service can reach Supabase
+- local admin settings such as thresholds and flags are still stored in the browser for the demo flow
+- it is intended for demo use and is not a production-secure admin auth system
+
 ## Run The Flask Stub
 
 Create a Python environment, then install the backend dependencies:

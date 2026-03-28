@@ -16,6 +16,16 @@ type StoredHistoryItem = {
   created_at: string;
 };
 
+type RemoteAdminOverviewItem = {
+  created_at?: string | null;
+  display_name?: string | null;
+  email?: string | null;
+  history?: StoredHistoryItem[];
+  last_seen_at?: string | null;
+  user_id: string;
+  vehicle_vin?: string | null;
+};
+
 export type RiskThresholds = {
   blinkRate: number;
   eyeClosure: number;
@@ -110,6 +120,10 @@ function labelFromEmail(email: string) {
       .map((part) => part[0]?.toUpperCase() + part.slice(1))
       .join(" ") || "Driver"
   );
+}
+
+function emailFromSeed(seed: string) {
+  return `${slugify(seed) || "driver"}@fleet.demo`;
 }
 
 function normalizeThresholds(thresholds?: Partial<RiskThresholds>): RiskThresholds {
@@ -280,32 +294,109 @@ function buildHistoryEntry(item: StoredHistoryItem): DashboardHistoryEntry {
   };
 }
 
-export function loadAdminDashboardUsers() {
+function mergeStoredHistory(primary: StoredHistoryItem[], secondary: StoredHistoryItem[]) {
+  const seen = new Set<string>();
+  const merged = [...primary, ...secondary].filter((item) => {
+    const key = `${item.created_at}-${item.confidence}-${item.user_id}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  return merged.sort(
+    (left, right) =>
+      new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+  );
+}
+
+async function readRemoteAdminOverview() {
+  if (typeof window === "undefined") {
+    return [] as RemoteAdminOverviewItem[];
+  }
+
+  try {
+    const response = await fetch("/api/admin-overview", {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return [] as RemoteAdminOverviewItem[];
+    }
+
+    const result = (await response.json()) as { items?: RemoteAdminOverviewItem[] };
+    return Array.isArray(result.items) ? result.items : [];
+  } catch {
+    return [] as RemoteAdminOverviewItem[];
+  }
+}
+
+export async function loadAdminDashboardUsers() {
   const managedUsers = readManagedUsers();
   const managedByEmail = new Map(managedUsers.map((user) => [user.email, user] as const));
+  const managedByUserId = new Map(
+    managedUsers
+      .filter((user) => user.userId)
+      .map((user) => [user.userId as string, user] as const),
+  );
   const accounts = getLocalAccounts();
+  const accountsByEmail = new Map(accounts.map((account) => [account.email, account] as const));
+  const accountsByUserId = new Map(accounts.map((account) => [account.userId, account] as const));
   const historyByUserId = readAllHistory();
   const alertFlags = readAlertFlags();
-  const emails = new Set<string>();
+  const remoteItems = await readRemoteAdminOverview();
+  const remoteByUserId = new Map(remoteItems.map((item) => [item.user_id, item] as const));
+  const identityKeys = new Set<string>();
 
-  managedUsers.forEach((user) => {
-    if (!user.archived) {
-      emails.add(user.email);
-    }
+  remoteItems.forEach((item) => {
+    identityKeys.add(item.user_id);
   });
   accounts.forEach((account) => {
     if (!managedByEmail.get(account.email)?.archived) {
-      emails.add(account.email);
+      identityKeys.add(account.userId);
+    }
+  });
+  managedUsers.forEach((user) => {
+    if (!user.archived) {
+      identityKeys.add(user.userId ?? user.email);
     }
   });
 
-  return [...emails]
-    .map((email) => {
-      const account = accounts.find((entry) => entry.email === email);
-      const managed = managedByEmail.get(email);
+  return [...identityKeys]
+    .map((key) => {
+      const remote =
+        remoteByUserId.get(key) ??
+        [...remoteItems].find((item) => managedByEmail.get(key)?.userId === item.user_id) ??
+        null;
+      const managed =
+        managedByUserId.get(key) ??
+        managedByEmail.get(key) ??
+        (remote ? managedByUserId.get(remote.user_id) : undefined) ??
+        undefined;
+      const account =
+        accountsByUserId.get(key) ??
+        accountsByEmail.get(key) ??
+        (managed ? accountsByEmail.get(managed.email) : undefined) ??
+        (remote?.email ? accountsByEmail.get(normalizeEmail(remote.email)) : undefined) ??
+        undefined;
       const userId =
-        managed?.userId ?? account?.userId ?? `user-${slugify(email) || "driver"}`;
-      const rawHistory = historyByUserId.get(userId) ?? [];
+        remote?.user_id ??
+        managed?.userId ??
+        account?.userId ??
+        `user-${slugify(managed?.email ?? account?.email ?? key) || "driver"}`;
+      const fallbackEmailSeed = remote?.display_name ?? managed?.name ?? account?.email ?? userId;
+      const email = normalizeEmail(
+        managed?.email ??
+          account?.email ??
+          remote?.email ??
+          emailFromSeed(fallbackEmailSeed),
+      );
+      const mergedRawHistory = mergeStoredHistory(
+        remote?.history ?? [],
+        historyByUserId.get(userId) ?? [],
+      );
+      const rawHistory = mergedRawHistory;
       const history = [...rawHistory]
         .sort(
           (left, right) =>
@@ -334,8 +425,15 @@ export function loadAdminDashboardUsers() {
           : null;
 
       return {
-        id: managed?.id ?? account?.userId ?? `admin-${slugify(email) || Date.now().toString()}`,
-        name: managed?.name ?? labelFromEmail(email),
+        id:
+          managed?.id ??
+          remote?.user_id ??
+          account?.userId ??
+          `admin-${slugify(email) || Date.now().toString()}`,
+        name:
+          managed?.name ??
+          remote?.display_name?.trim() ??
+          labelFromEmail(email),
         email,
         role: managed?.role ?? (account ? "Driver" : "Pending"),
         assignedDevices:
@@ -343,17 +441,28 @@ export function loadAdminDashboardUsers() {
             ? managed.assignedDevices
             : account?.vin
               ? [account.vin]
+              : remote?.vehicle_vin
+                ? [remote.vehicle_vin]
               : [],
         thresholds: managed?.thresholds ?? DEFAULT_THRESHOLDS,
-        createdAt: managed?.createdAt ?? account?.createdAt ?? new Date().toISOString(),
-        source: account ? "driver" : "admin",
+        createdAt:
+          remote?.created_at ??
+          managed?.createdAt ??
+          account?.createdAt ??
+          new Date().toISOString(),
+        source: remote || account ? "driver" : "admin",
         userId,
         history,
         alerts,
         captureCount: history.length,
         averageConfidence,
         averageBlinkRate,
-        lastActive: history[0]?.createdAt ?? managed?.createdAt ?? account?.createdAt ?? null,
+        lastActive:
+          history[0]?.createdAt ??
+          remote?.last_seen_at ??
+          managed?.createdAt ??
+          account?.createdAt ??
+          null,
         latestStatus: history[0]?.status ?? null,
       } satisfies DashboardUser;
     })

@@ -46,6 +46,7 @@ import {
   storeAdminSession,
   type AdminSession,
 } from "@/lib/admin-auth";
+import { sendDangerDrivingAlert } from "@/lib/user-alerts";
 
 type UserEditorState = {
   assignedDevices: string;
@@ -116,13 +117,17 @@ export default function AdminDashboard() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editorState, setEditorState] = useState<UserEditorState>(buildEmptyEditorState);
   const [editorMode, setEditorMode] = useState<"add" | "edit">("add");
+  const [dashboardNotice, setDashboardNotice] = useState<string | null>(null);
+  const [usersLoading, setUsersLoading] = useState(false);
 
-  function refreshUsers(preferredEmail?: string | null) {
-    const nextUsers = loadAdminDashboardUsers();
+  async function refreshUsers(preferredEmail?: string | null) {
+    setUsersLoading(true);
+    const nextUsers = await loadAdminDashboardUsers();
     setUsers(nextUsers);
 
     if (nextUsers.length === 0) {
       setSelectedEmail(null);
+      setUsersLoading(false);
       return;
     }
 
@@ -131,9 +136,10 @@ export default function AdminDashboard() {
         ? preferredEmail
         : selectedEmail && nextUsers.some((user) => user.email === selectedEmail)
           ? selectedEmail
-          : nextUsers[0]?.email ?? null;
+          : null;
 
     setSelectedEmail(nextSelected);
+    setUsersLoading(false);
   }
 
   useEffect(() => {
@@ -141,13 +147,13 @@ export default function AdminDashboard() {
     setAdminSession(session);
 
     if (session) {
-      refreshUsers();
+      void refreshUsers();
     }
 
     setAuthChecked(true);
   }, []);
 
-  const selectedUser = users.find((user) => user.email === selectedEmail) ?? users[0] ?? null;
+  const selectedUser = users.find((user) => user.email === selectedEmail) ?? null;
   const summary = useMemo(() => {
     const totalDevices = users.reduce((sum, user) => sum + user.assignedDevices.length, 0);
     const totalAlerts = users.reduce((sum, user) => sum + user.alerts.length, 0);
@@ -155,6 +161,11 @@ export default function AdminDashboard() {
       (sum, user) => sum + user.alerts.filter((alert) => alert.flag !== null).length,
       0,
     );
+    const riskyUsers = users.filter((user) => user.latestStatus === "NOT SAFE").length;
+    const lowConfidenceUsers = users.filter(
+      (user) => user.averageConfidence !== null && user.averageConfidence < 70,
+    ).length;
+    const missingHistoryUsers = users.filter((user) => user.captureCount === 0).length;
     const confidenceValues = users
       .map((user) => user.averageConfidence)
       .filter((value): value is number => value !== null);
@@ -163,6 +174,9 @@ export default function AdminDashboard() {
       totalDevices,
       totalAlerts,
       flaggedAlerts,
+      riskyUsers,
+      lowConfidenceUsers,
+      missingHistoryUsers,
       averageConfidence:
         confidenceValues.length > 0
           ? Math.round(
@@ -171,6 +185,29 @@ export default function AdminDashboard() {
           : null,
     };
   }, [users]);
+  const dashboardRoast = useMemo(() => {
+    if (users.length === 0) {
+      return "Zero drivers, zero devices, zero drama. Stunning strategy if the goal was to make an insurance dashboard look emotionally unavailable.";
+    }
+
+    if (summary.riskyUsers > 0) {
+      return `${users.length} users on the board and ${summary.riskyUsers} of them are actively flirting with bad decisions. ${
+        summary.totalAlerts > 0
+          ? `${summary.totalAlerts} alerts later, the table is basically begging someone to pretend risk management is a real hobby.`
+          : "And somehow the alert count is still asleep, which is adorable in the worst possible way."
+      }`;
+    }
+
+    if (summary.lowConfidenceUsers > 0) {
+      return `${summary.lowConfidenceUsers} users are dragging the average confidence down, which is a brave choice for people operating insured vehicles. The table looks calm, but it has exactly the kind of vibes that make claims departments develop eye twitches.`;
+    }
+
+    if (summary.missingHistoryUsers > 0) {
+      return `${summary.missingHistoryUsers} users have no history at all, so apparently documentation is just a rumor now. Love the commitment to mystery, hate it for underwriting.`;
+    }
+
+    return `Average confidence is ${summary.averageConfidence ?? "--"}%, so congratulations: the fleet is behaving just well enough to be smug about it. Even the alert queue looks bored, which honestly feels a little suspicious.`;
+  }, [summary, users.length]);
 
   function handleLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -188,7 +225,7 @@ export default function AdminDashboard() {
     storeAdminSession(result.session);
     setAdminSession(result.session);
     setLoginError(null);
-    refreshUsers();
+    void refreshUsers();
   }
 
   function handleSignOut() {
@@ -228,7 +265,7 @@ export default function AdminDashboard() {
     });
 
     setDialogOpen(false);
-    refreshUsers(editorState.email.trim().toLowerCase());
+    void refreshUsers(editorMode === "edit" ? editorState.email.trim().toLowerCase() : null);
   }
 
   function handleDeleteUser(user: DashboardUser) {
@@ -237,12 +274,12 @@ export default function AdminDashboard() {
     }
 
     archiveAdminManagedUser(user);
-    refreshUsers(selectedUser?.email === user.email ? null : selectedUser?.email ?? null);
+    void refreshUsers(selectedUser?.email === user.email ? null : selectedUser?.email ?? null);
   }
 
   function handleResetThresholds(user: DashboardUser) {
     resetManagedUserThresholds(user);
-    refreshUsers(user.email);
+    void refreshUsers(user.email);
   }
 
   function handleFlagToggle(
@@ -251,7 +288,16 @@ export default function AdminDashboard() {
     currentFlag: "correct" | "false_positive" | null,
   ) {
     updateAlertFlag(alertId, currentFlag === nextFlag ? null : nextFlag);
-    refreshUsers(selectedUser?.email ?? null);
+    void refreshUsers(selectedUser?.email ?? null);
+  }
+
+  function handleDangerNotification(user: DashboardUser) {
+    sendDangerDrivingAlert({
+      actor: "Insurance dashboard",
+      userId: user.userId,
+      userName: user.name,
+    });
+    setDashboardNotice(`Dangerous driving alert sent to ${user.name}.`);
   }
 
   if (!authChecked) {
@@ -333,14 +379,13 @@ export default function AdminDashboard() {
           <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-3xl">
               <Badge className="w-fit bg-black/5 text-[#111111]" variant="outline">
-                Hidden Fleet Console
+                Insurance Dashboard
               </Badge>
               <h1 className="mt-4 text-4xl font-semibold tracking-[-0.07em] text-[#111111] sm:text-5xl">
-                Admin dashboard for users, thresholds, and alert review.
+                Insurance Dashboard
               </h1>
               <p className="mt-4 max-w-2xl text-base leading-7 text-[#111111]/66">
-                Same visual system, separate access. This route is intentionally private and uses
-                local demo data where live backend records are not available yet.
+                Review driver risk, thresholds, and alert history in one place.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
@@ -355,6 +400,33 @@ export default function AdminDashboard() {
             </div>
           </div>
         </header>
+
+        <Card className="border-black/10 bg-[linear-gradient(135deg,#111111,#2d2118)] text-white shadow-[0_24px_70px_rgba(17,17,17,0.16)]">
+          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-start sm:justify-between">
+            <div className="max-w-4xl">
+              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-white/55">
+                Sassy Risk AI
+              </p>
+              <p className="mt-3 text-base leading-7 text-white/88 sm:text-lg">
+                {dashboardRoast}
+              </p>
+            </div>
+            <Badge className="shrink-0 border-white/10 bg-white/10 text-white" variant="outline">
+              local roast engine
+            </Badge>
+          </CardContent>
+        </Card>
+
+        {dashboardNotice ? (
+          <Card className="border-rose-200 bg-rose-50 shadow-none">
+            <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-rose-900">{dashboardNotice}</p>
+              <Button onClick={() => setDashboardNotice(null)} size="xs" type="button" variant="outline">
+                Dismiss
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card className="border-black/10 bg-white/78 shadow-[0_18px_48px_rgba(17,17,17,0.06)]">
@@ -372,7 +444,7 @@ export default function AdminDashboard() {
             <CardContent className="flex items-start justify-between p-6">
               <div>
                 <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">
-                  Assigned Devices
+                  Vehicle VINs
                 </p>
                 <p className="mt-3 text-4xl font-semibold tracking-[-0.06em]">
                   {summary.totalDevices}
@@ -423,7 +495,7 @@ export default function AdminDashboard() {
                   Table view
                 </CardTitle>
                 <CardDescription>
-                  Edit roles, device assignments, and local drowsiness thresholds.
+                  Edit roles, vehicle VIN mappings, and local drowsiness thresholds.
                 </CardDescription>
               </div>
               <Button onClick={openAddUserDialog} variant="outline">
@@ -431,7 +503,11 @@ export default function AdminDashboard() {
               </Button>
             </CardHeader>
             <CardContent className="p-0">
-              {users.length === 0 ? (
+              {usersLoading ? (
+                <div className="px-6 pb-6 text-sm leading-6 text-slate-600">
+                  Loading insurance dashboard data...
+                </div>
+              ) : users.length === 0 ? (
                 <div className="px-6 pb-6 text-sm leading-6 text-slate-600">
                   No admin-visible users yet. Add one here or create a driver account in the app
                   and it will appear automatically.
@@ -451,7 +527,7 @@ export default function AdminDashboard() {
                           Role
                         </th>
                         <th className="px-4 py-4 font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">
-                          Assigned Device
+                          Vehicle VIN
                         </th>
                         <th className="px-4 py-4 font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">
                           Last Active
@@ -503,6 +579,14 @@ export default function AdminDashboard() {
                             </td>
                             <td className="px-4 py-4">
                               <div className="flex flex-wrap gap-2">
+                                <Button
+                                  onClick={() => handleDangerNotification(user)}
+                                  size="xs"
+                                  type="button"
+                                  variant="accent"
+                                >
+                                  Notify
+                                </Button>
                                 <Button
                                   onClick={() => openEditUserDialog(user)}
                                   size="xs"
@@ -563,6 +647,16 @@ export default function AdminDashboard() {
                         {selectedUser.latestStatus ?? "No status"}
                       </Badge>
                       <Badge variant="outline">{selectedUser.email}</Badge>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        className="bg-[var(--risk)] text-white hover:bg-[var(--risk)]/90"
+                        onClick={() => handleDangerNotification(selectedUser)}
+                        type="button"
+                      >
+                        Send Dangerous Driving Alert
+                      </Button>
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -672,54 +766,56 @@ export default function AdminDashboard() {
                     No alert history is available for this user yet.
                   </p>
                 ) : (
-                  selectedUser.alerts.slice(0, 6).map((alert) => (
-                    <Card className="border-black/8 bg-slate-50 shadow-none" key={alert.id}>
-                      <CardContent className="grid gap-3 p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <p className="font-medium text-slate-950">
-                              {alert.confidence}% confidence at {formatTimestamp(alert.createdAt)}
-                            </p>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Eye {alert.eyeClosure}% | Blink {alert.blinkRate}/m | Tilt{" "}
-                              {alert.headTilt} deg | Reaction {alert.reactionTime}s
-                            </p>
+                  <div className="grid max-h-[34rem] gap-3 overflow-y-auto pr-1">
+                    {selectedUser.alerts.map((alert) => (
+                      <Card className="border-black/8 bg-slate-50 shadow-none" key={alert.id}>
+                        <CardContent className="grid gap-3 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="font-medium text-slate-950">
+                                {alert.confidence}% confidence at {formatTimestamp(alert.createdAt)}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-500">
+                                Eye {alert.eyeClosure}% | Blink {alert.blinkRate}/m | Tilt{" "}
+                                {alert.headTilt} deg | Reaction {alert.reactionTime}s
+                              </p>
+                            </div>
+                            <Badge variant="danger">NOT SAFE</Badge>
                           </div>
-                          <Badge variant="danger">NOT SAFE</Badge>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            className={
-                              alert.flag === "correct"
-                                ? "bg-[#1f7a4f] text-white hover:bg-[#1f7a4f]/90"
-                                : ""
-                            }
-                            onClick={() => handleFlagToggle(alert.id, "correct", alert.flag)}
-                            size="xs"
-                            type="button"
-                            variant={alert.flag === "correct" ? "default" : "outline"}
-                          >
-                            Correct
-                          </Button>
-                          <Button
-                            className={
-                              alert.flag === "false_positive"
-                                ? "bg-[var(--accent)] text-white hover:bg-[var(--accent)]/92"
-                                : ""
-                            }
-                            onClick={() =>
-                              handleFlagToggle(alert.id, "false_positive", alert.flag)
-                            }
-                            size="xs"
-                            type="button"
-                            variant={alert.flag === "false_positive" ? "accent" : "outline"}
-                          >
-                            False Positive
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              className={
+                                alert.flag === "correct"
+                                  ? "bg-[#1f7a4f] text-white hover:bg-[#1f7a4f]/90"
+                                  : ""
+                              }
+                              onClick={() => handleFlagToggle(alert.id, "correct", alert.flag)}
+                              size="xs"
+                              type="button"
+                              variant={alert.flag === "correct" ? "default" : "outline"}
+                            >
+                              Correct
+                            </Button>
+                            <Button
+                              className={
+                                alert.flag === "false_positive"
+                                  ? "bg-[var(--accent)] text-white hover:bg-[var(--accent)]/92"
+                                  : ""
+                              }
+                              onClick={() =>
+                                handleFlagToggle(alert.id, "false_positive", alert.flag)
+                              }
+                              size="xs"
+                              type="button"
+                              variant={alert.flag === "false_positive" ? "accent" : "outline"}
+                            >
+                              False Positive
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -741,23 +837,27 @@ export default function AdminDashboard() {
                     No saved capture history is available yet.
                   </p>
                 ) : (
-                  selectedUser.history.slice(0, 5).map((item) => (
-                    <div
-                      className="rounded-xl border border-black/8 bg-slate-50 px-4 py-3"
-                      key={item.id}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="font-medium text-slate-950">{formatTimestamp(item.createdAt)}</p>
-                        <Badge variant={item.status === "NOT SAFE" ? "danger" : "safe"}>
-                          {item.status}
-                        </Badge>
+                  <div className="grid max-h-[34rem] gap-3 overflow-y-auto pr-1">
+                    {selectedUser.history.map((item) => (
+                      <div
+                        className="rounded-xl border border-black/8 bg-slate-50 px-4 py-3"
+                        key={item.id}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="font-medium text-slate-950">
+                            {formatTimestamp(item.createdAt)}
+                          </p>
+                          <Badge variant={item.status === "NOT SAFE" ? "danger" : "safe"}>
+                            {item.status}
+                          </Badge>
+                        </div>
+                        <p className="mt-2 text-sm text-slate-600">
+                          Confidence {item.confidence}% | Blink {item.blinkRate}/m | Eye{" "}
+                          {item.eyeClosure}% | Reaction {item.reactionTime}s
+                        </p>
                       </div>
-                      <p className="mt-2 text-sm text-slate-600">
-                        Confidence {item.confidence}% | Blink {item.blinkRate}/m | Eye{" "}
-                        {item.eyeClosure}% | Reaction {item.reactionTime}s
-                      </p>
-                    </div>
-                  ))
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -819,7 +919,7 @@ export default function AdminDashboard() {
             </label>
 
             <label className="grid gap-2 text-sm font-medium text-slate-700">
-              <span>Assign device(s)</span>
+              <span>Assign vehicle VIN(s)</span>
               <Input
                 onChange={(event) =>
                   setEditorState((current) => ({

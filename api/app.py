@@ -1,5 +1,6 @@
 import logging
 import os
+from collections import defaultdict
 from datetime import datetime, timezone
 
 import joblib
@@ -68,6 +69,37 @@ def build_reasons(normalized_features):
         reasons.append("Recent measurements remain inside the starter safety band.")
 
     return reasons
+
+
+def format_admin_user(user_id, user_row, history_items):
+    display_name = None
+    email = None
+    vehicle_vin = None
+    created_at = None
+    last_seen_at = None
+
+    if user_row:
+        display_name = user_row.get("display_name")
+        email = user_row.get("email")
+        vehicle_vin = user_row.get("vehicle_vin")
+        created_at = user_row.get("created_at")
+        last_seen_at = user_row.get("last_seen_at")
+
+    history_items = sorted(
+        history_items,
+        key=lambda item: item.get("created_at") or "",
+        reverse=True,
+    )
+
+    return {
+        "user_id": user_id,
+        "display_name": display_name or user_id,
+        "email": email,
+        "vehicle_vin": vehicle_vin,
+        "created_at": created_at,
+        "last_seen_at": last_seen_at,
+        "history": history_items,
+    }
 
 
 @app.route("/analyze", methods=["POST"])
@@ -232,6 +264,73 @@ def history():
     except Exception as exc:
         logger.warning("Supabase history query failed: %s", exc)
         return jsonify({"items": [], "error": "history query failed"}), 500
+
+
+@app.route("/admin/overview", methods=["GET"])
+def admin_overview():
+    if supabase is None:
+        return jsonify({"items": [], "warning": "Supabase is not configured"}), 200
+
+    try:
+        try:
+            users_response = (
+                supabase.table(USERS_TABLE)
+                .select("id, display_name, email, vehicle_vin, created_at, last_seen_at")
+                .order("last_seen_at", desc=True)
+                .execute()
+            )
+        except Exception:
+            users_response = (
+                supabase.table(USERS_TABLE)
+                .select("id, display_name, created_at, last_seen_at")
+                .order("last_seen_at", desc=True)
+                .execute()
+            )
+        history_response = (
+            supabase.table(SUPABASE_TABLE)
+            .select(
+                "id, user_id, eye_closure, blink_rate, head_tilt, reaction_time, status, confidence, score, source, created_at"
+            )
+            .order("created_at", desc=True)
+            .limit(1000)
+            .execute()
+        )
+
+        users = users_response.data or []
+        history_items = history_response.data or []
+        users_by_id = {
+            user["id"]: user
+            for user in users
+            if isinstance(user, dict) and user.get("id")
+        }
+        history_by_user_id = defaultdict(list)
+
+        for item in history_items:
+            user_id = item.get("user_id")
+            if not user_id:
+                continue
+            history_by_user_id[user_id].append(item)
+
+        user_ids = set(users_by_id.keys()) | set(history_by_user_id.keys())
+        items = [
+            format_admin_user(
+                user_id,
+                users_by_id.get(user_id),
+                history_by_user_id.get(user_id, []),
+            )
+            for user_id in user_ids
+        ]
+        items.sort(
+            key=lambda item: item.get("history", [{}])[0].get("created_at")
+            or item.get("last_seen_at")
+            or "",
+            reverse=True,
+        )
+
+        return jsonify({"items": items})
+    except Exception as exc:
+        logger.warning("Supabase admin overview query failed: %s", exc)
+        return jsonify({"items": [], "error": "admin overview query failed"}), 500
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { clearStoredSession, getStoredSession, type AppSession } from "@/lib/session";
+import { dismissUserAlert, readUserAlerts, type UserAlert } from "@/lib/user-alerts";
 
 const SAMPLE_INTERVAL_MS = 450;
 const ANALYSIS_INTERVAL_MS = 3500;
@@ -341,6 +342,7 @@ export default function DrowsinessMonitor({
   const [sessionVin, setSessionVin] = useState("");
   const [sessionReady, setSessionReady] = useState(false);
   const [helpDialogOpen, setHelpDialogOpen] = useState(false);
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [scoreCommentary, setScoreCommentary] = useState(
     "Run a capture and I will give you a tiny AI read on your confidence score.",
   );
@@ -351,6 +353,7 @@ export default function DrowsinessMonitor({
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [insuranceAlert, setInsuranceAlert] = useState<UserAlert | null>(null);
   const [visionEngine, setVisionEngine] = useState<VisionEngine>("heuristic");
   const commentaryStatus = assessment?.status ?? null;
   const commentaryConfidence =
@@ -898,6 +901,30 @@ export default function DrowsinessMonitor({
   }, [sessionReady, sessionUserId]);
 
   useEffect(() => {
+    if (!sessionReady || !sessionUserId || typeof window === "undefined") {
+      return;
+    }
+
+    const storageKey = `drive-awake-user-alerts:${sessionUserId}`;
+    const syncInsuranceAlert = () => {
+      setInsuranceAlert(readUserAlerts(sessionUserId)[0] ?? null);
+    };
+
+    syncInsuranceAlert();
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key && event.key !== storageKey) {
+        return;
+      }
+
+      syncInsuranceAlert();
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [sessionReady, sessionUserId]);
+
+  useEffect(() => {
     if (!commentaryRequestKey || commentaryConfidence === null || commentaryStatus === null) {
       return;
     }
@@ -1200,6 +1227,11 @@ export default function DrowsinessMonitor({
     router.push("/login");
   }
 
+  function handleConfirmSignOut() {
+    setLogoutDialogOpen(false);
+    handleSignOut();
+  }
+
   function handleHelpDialogChange(open: boolean) {
     setHelpDialogOpen(open);
 
@@ -1209,6 +1241,16 @@ export default function DrowsinessMonitor({
         "seen",
       );
     }
+  }
+
+  function handleDismissInsuranceAlert() {
+    if (!insuranceAlert || !sessionUserId) {
+      setInsuranceAlert(null);
+      return;
+    }
+
+    dismissUserAlert(sessionUserId, insuranceAlert.id);
+    setInsuranceAlert(null);
   }
 
   if (!sessionReady) {
@@ -1222,8 +1264,9 @@ export default function DrowsinessMonitor({
   }
 
   return (
-    <Dialog onOpenChange={handleHelpDialogChange} open={helpDialogOpen}>
-      <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 lg:px-10">
+    <>
+      <Dialog onOpenChange={handleHelpDialogChange} open={helpDialogOpen}>
+        <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 lg:px-10">
         <Card className="mb-4 rounded-[1.4rem] border-slate-200 bg-slate-100/90 shadow-none">
           <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
@@ -1239,6 +1282,19 @@ export default function DrowsinessMonitor({
             </div>
           </CardContent>
         </Card>
+        {insuranceAlert ? (
+          <Alert className="mb-4 rounded-xl border-rose-200 bg-rose-50 sm:rounded-2xl">
+            <AlertTitle>Insurance Warning</AlertTitle>
+            <AlertDescription>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm leading-6 text-rose-950">{insuranceAlert.message}</p>
+                <Button onClick={handleDismissInsuranceAlert} size="xs" type="button" variant="outline">
+                  Dismiss
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
+        ) : null}
         <Card className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-[var(--panel-strong)] p-6 shadow-sm">
         <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)]/30 to-transparent" />
 
@@ -1254,11 +1310,11 @@ export default function DrowsinessMonitor({
           </div>
           <div className="justify-self-end">
             <Button
-              aria-label="Open profile and sign out"
+              aria-label="Open sign out confirmation"
               className="size-11 rounded-full border border-slate-200 bg-white p-0 text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={handleSignOut}
+              onClick={() => setLogoutDialogOpen(true)}
               size="icon"
-              title="Sign out"
+              title="Open sign out confirmation"
               type="button"
               variant="outline"
             >
@@ -1710,64 +1766,83 @@ export default function DrowsinessMonitor({
             </Accordion>
         </div>
 
-        <canvas ref={canvasRef} className="hidden" />
-        </Card>
-      </main>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>How to use Drive Awake</DialogTitle>
-          <DialogDescription>
-            A quick camera check before you save a confidence reading.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
-            <CardContent className="p-4">
-              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
-                1. Start
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-700">
-                Press the green Start button to turn on your camera and finish calibration.
-              </p>
-            </CardContent>
+          <canvas ref={canvasRef} className="hidden" />
           </Card>
-          <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
-            <CardContent className="p-4">
-              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
-                2. Wait
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-700">
-                Watch the cue inside the viewfinder. When it turns ready, the camera button becomes green.
-              </p>
-            </CardContent>
-          </Card>
-          <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
-            <CardContent className="p-4">
-              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
-                3. Capture
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-700">
-                Tap the green camera button to record the reading and save the confidence result.
-              </p>
-            </CardContent>
-          </Card>
-          <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
-            <CardContent className="p-4">
-              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
-                4. Review
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-700">
-                Check the confidence panel, saved history, and graph below the camera view.
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-        <DialogFooter>
-          <Button onClick={() => handleHelpDialogChange(false)} type="button">
-            Got it
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </main>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>How to use Drive Awake</DialogTitle>
+            <DialogDescription>
+              A quick camera check before you save a confidence reading.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
+              <CardContent className="p-4">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                  1. Start
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  Press the green Start button to turn on your camera and finish calibration.
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
+              <CardContent className="p-4">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                  2. Wait
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  Watch the cue inside the viewfinder. When it turns ready, the camera button becomes green.
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
+              <CardContent className="p-4">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                  3. Capture
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  Tap the green camera button to record the reading and save the confidence result.
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
+              <CardContent className="p-4">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                  4. Review
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  Check the confidence panel, saved history, and graph below the camera view.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => handleHelpDialogChange(false)} type="button">
+              Got it
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog onOpenChange={setLogoutDialogOpen} open={logoutDialogOpen}>
+        <DialogContent className="w-[min(92vw,28rem)]">
+          <DialogHeader>
+            <DialogTitle>Confirm logout?</DialogTitle>
+            <DialogDescription>
+              You will be signed out of the monitor and returned to the login page.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setLogoutDialogOpen(false)} type="button" variant="ghost">
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmSignOut} type="button">
+              Log out
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
