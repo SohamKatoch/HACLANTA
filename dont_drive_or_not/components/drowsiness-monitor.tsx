@@ -1,6 +1,8 @@
 "use client";
 
 import { startTransition, useEffect, useEffectEvent, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   analyzeDrowsiness,
   clamp,
@@ -18,6 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { clearStoredSession, getStoredSession } from "@/lib/session";
 
 const SAMPLE_INTERVAL_MS = 450;
 const ANALYSIS_INTERVAL_MS = 3500;
@@ -181,7 +184,12 @@ function MetricCard({
   );
 }
 
-export default function DrowsinessMonitor() {
+export default function DrowsinessMonitor({
+  requireSession = false,
+}: Readonly<{
+  requireSession?: boolean;
+}>) {
+  const router = useRouter();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -206,6 +214,9 @@ export default function DrowsinessMonitor() {
     "A cue will flash while monitoring is active.",
   );
   const [lastReactionTime, setLastReactionTime] = useState<number | null>(null);
+  const [sessionName, setSessionName] = useState("Driver");
+  const [sessionEmail, setSessionEmail] = useState("");
+  const [sessionReady, setSessionReady] = useState(false);
 
   function clearReactionTimers() {
     if (reactionCueTimeoutRef.current) {
@@ -493,6 +504,24 @@ export default function DrowsinessMonitor() {
   }, [stage]);
 
   useEffect(() => {
+    const stored = getStoredSession();
+
+    if (stored) {
+      setSessionName(stored.name);
+      setSessionEmail(stored.email);
+      setSessionReady(true);
+      return;
+    }
+
+    if (requireSession) {
+      router.replace("/login");
+      return;
+    }
+
+    setSessionReady(true);
+  }, [requireSession, router]);
+
+  useEffect(() => {
     return () => {
       clearReactionTimers();
       stopMediaStream();
@@ -565,10 +594,43 @@ export default function DrowsinessMonitor() {
         ? "safe"
         : "default";
 
+  function handleSignOut() {
+    clearStoredSession();
+    router.push("/login");
+  }
+
+  if (!sessionReady) {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-4xl items-center justify-center px-6">
+        <div className="rounded-full border border-[var(--line)] bg-white/70 px-5 py-3 font-mono text-xs uppercase tracking-[0.25em] text-black/55">
+          Preparing Session
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-6 sm:px-8 lg:px-10">
       <Card className="relative overflow-hidden rounded-[2rem] bg-[var(--panel-strong)] p-6 shadow-[0_25px_80px_rgba(80,48,24,0.12)] backdrop-blur-xl sm:p-8">
         <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)]/50 to-transparent" />
+
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[1.4rem] border border-[var(--line)] bg-white/60 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge variant="outline">Signed In</Badge>
+            <span className="text-sm text-black/65">
+              {sessionName ?? "Driver"}
+              {sessionEmail ? ` · ${sessionEmail}` : ""}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild size="sm" variant="secondary">
+              <Link href="/">Home</Link>
+            </Button>
+            <Button onClick={handleSignOut} size="sm" variant="outline">
+              Sign Out
+            </Button>
+          </div>
+        </div>
 
         <div className="grid gap-8 lg:grid-cols-[1.25fr_0.9fr]">
           <div className="space-y-6">
