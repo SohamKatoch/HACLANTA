@@ -1,144 +1,111 @@
-# Drive Awake / Insurance Risk Demo
+# Drive Awake
 
-This project is a browser-based driver readiness and risk-monitoring demo for live presentations.
+Drive Awake is a demo app with:
 
-It includes:
+- a driver-facing monitor at `/monitor`
+- an insurance dashboard at `/admin`
+- a Next.js frontend in `dont_drive_or_not/`
+- a Flask backend in `api/`
 
-- `dont_drive_or_not/`: Next.js frontend for landing, auth, driver monitor, and insurance dashboard
-- `api/`: Flask backend for scoring, history, and Supabase-backed overview data
-- `supabase/schema.sql`: schema for demo storage
-- `docs/`: supporting notes and demo materials
+This README is focused on how to install and run the app.
 
-## Stack
+## Prerequisites
 
-- Frontend: Next.js, React, TypeScript, Tailwind-style utility classes, shadcn-style components
-- Vision layer: browser webcam + MediaPipe Face Landmarker with heuristic fallback
-- Backend: Flask + Python scoring service
-- Data: Supabase for seeded/demo history and backend reads
+- Node.js 20+ or 22+
+- npm
+- Python 3.10+
 
-## Quick Start With Docker
-
-Run the frontend in Docker:
+## Install The Frontend
 
 ```powershell
 cd dont_drive_or_not
-docker build -t drive-awake-monitor .
-docker run --rm -p 3000:3000 drive-awake-monitor
+npm install
 ```
 
-Open `http://localhost:3000`.
-
-If you also want the Dockerized frontend to call the local Flask backend:
+## Run The Frontend
 
 ```powershell
-docker run --rm -p 3000:3000 -e FLASK_API_URL=http://host.docker.internal:5000 drive-awake-monitor
+cd dont_drive_or_not
+npm run dev
 ```
 
-## Quick Start Without Docker
+Then open `http://localhost:3000`.
 
-Start the backend:
+If you only want the UI demo, this is enough. The frontend can still run without Flask and will fall back to built-in scoring.
+
+## Optional Frontend Environment
+
+Create `dont_drive_or_not/.env.local` if you want extra integrations:
+
+```env
+FLASK_API_URL=http://127.0.0.1:5000
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-1.5-flash
+```
+
+Notes:
+
+- `FLASK_API_URL` lets Next.js proxy analysis/history/admin requests to Flask
+- if `FLASK_API_URL` is missing, the app still works with local fallback scoring
+- `GEMINI_API_KEY` is only for the score commentary box
+
+## Install The Backend
 
 ```powershell
 cd api
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env
+```
+
+## Run The Backend
+
+```powershell
+cd api
+.venv\Scripts\Activate.ps1
 python app.py
 ```
 
-Start the frontend in a second terminal:
+The Flask backend runs at `http://127.0.0.1:5000`.
 
-```powershell
-cd dont_drive_or_not
-npm install
-npm run dev
+## Optional Backend Environment
+
+Create `api/.env` if you want Supabase-backed history and dashboard data:
+
+```env
+SUPABASE_URL=your_supabase_url
+SUPABASE_KEY=your_supabase_key
+SUPABASE_TABLE=feature_log
+SUPABASE_REACTION_TABLE=reaction_tests
+SUPABASE_USERS_TABLE=user_data
+MODEL_PATH=
 ```
 
-Open `http://localhost:3000`.
+If these are not set, the backend still runs, but Supabase-backed features will be limited.
 
-## Required Environment Setup
+## App Routes
 
-Backend environment lives in `api/.env`.
+- `/` landing page
+- `/signup` demo account creation
+- `/login` demo login
+- `/monitor` driver monitor
+- `/admin` insurance dashboard
 
-Important variables:
-
-- `SUPABASE_URL`
-- `SUPABASE_KEY`
-- `SUPABASE_TABLE`
-- `SUPABASE_REACTION_TABLE`
-- `SUPABASE_USERS_TABLE`
-
-Frontend environment lives in `dont_drive_or_not/.env.local`.
-
-Important variable:
-
-- `FLASK_API_URL=http://127.0.0.1:5000`
-
-Notes:
-
-- `.env` and `.env.local` are intentionally ignored by git
-- if you deploy this project, these values must be added in the deployment platform settings
-- if `FLASK_API_URL` is missing, the frontend falls back to local threshold scoring
-- if Supabase keys are missing in `api/.env`, Supabase-backed history and insurance dashboard data will not load
-
-## Using The App
-
-### Driver Flow
-
-1. Open `http://localhost:3000/signup`
-2. Create a demo driver account
-3. Log in at `http://localhost:3000/login`
-4. Open `http://localhost:3000/monitor`
-5. Allow camera access
-6. Start monitoring and capture readings
-7. Review the confidence history and graph
-
-### Insurance Dashboard
-
-Open `http://localhost:3000/admin`
-
-Credentials:
+Admin demo credentials:
 
 - username: `admin`
 - password: `1234`
 
-What the dashboard does:
-
-- shows the insurance dashboard summary cards
-- reads driver/history data from the backend when `FLASK_API_URL` and Supabase are configured
-- merges that with local admin-side settings like thresholds and alert flags
-- lets you add/edit users, set thresholds, and flag alerts
-- lets you send a dangerous-driving notification to a selected driver
-- shows a snarky summary panel for demo effect
-
-Important limitation:
-
-- the current Supabase schema does not store full email and VIN metadata for seeded users, so some seeded records may show placeholder email or blank VIN unless you map them locally or extend the schema
-
-## Supabase Demo Data
-
-Run [supabase/schema.sql](supabase/schema.sql) first in Supabase, then use your demo seed SQL in the Supabase SQL editor.
-
-Once seeded, the data will appear in the insurance dashboard only when:
-
-1. Flask is running
-2. `api/.env` contains valid Supabase credentials
-3. `dont_drive_or_not/.env.local` contains a valid `FLASK_API_URL`
-
-## Project Map
+## Project Structure
 
 ```text
-api/                  Flask backend and scoring service
-docs/                 notes and demo materials
-dont_drive_or_not/    frontend app
+api/                  Flask backend
+docs/                 architecture and demo docs
+dont_drive_or_not/    Next.js frontend
 supabase/             SQL schema
 ```
 
-## Demo Script
+## More Docs
 
-Use [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) for a presentation talk track covering the framework, code architecture, and live walkthrough.
-
-## Architecture Notes
-
-Use [docs/ARCHITECTURE_OVERVIEW.md](docs/ARCHITECTURE_OVERVIEW.md) for a fuller explanation of the end-to-end architecture, backend flow, and ML/scoring design.
+- [Architecture overview](docs/ARCHITECTURE_OVERVIEW.md)
+- [Demo script](docs/DEMO_SCRIPT.md)
