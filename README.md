@@ -1,12 +1,26 @@
-﻿# Driver Safety Monitor Scaffold
+# Driver Safety Monitor Scaffold
 
 This repo now has:
 
 - `web/`: Next.js frontend (webcam capture, lightweight feature extraction, reaction test, POST to `/api/analyze`)
 - `api/`: Flask backend (`/analyze` scoring endpoint, optional ML model, optional Supabase logging)
-- `supabase/schema.sql`: starter table schema
+- `supabase/schema.sql`: `user_data`, `feature_log`, `reaction_tests` (numeric data only)
+- `docs/learnings/`: architecture notes (`LEARNINGS.md`) and pitfalls (`MISTAKES.md`)
 
 ## 1) Run Flask API
+
+**Linux / macOS**
+
+```bash
+cd api
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python app.py
+```
+
+**Windows (PowerShell)**
 
 ```powershell
 cd api
@@ -20,6 +34,17 @@ python app.py
 Flask runs at `http://127.0.0.1:5000`.
 
 ## 2) Run Next.js frontend
+
+**Linux / macOS**
+
+```bash
+cd web
+npm install
+cp .env.local.example .env.local
+npm run dev
+```
+
+**Windows**
 
 ```powershell
 cd web
@@ -42,9 +67,12 @@ Request body:
   "blink_rate": 18,
   "head_tilt": 0.12,
   "reaction_time": 0.85,
-  "user_id": "optional-user-id"
+  "user_id": "optional-anonymous-id",
+  "log_reaction_event": false
 }
 ```
+
+Set `log_reaction_event` to `true` to insert a row into Supabase `reaction_tests` (when configured). The UI exposes this as an optional checkbox.
 
 Response example:
 

@@ -19,6 +19,111 @@ main {
   padding: 24px;
 }
 
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.lede {
+  margin: 8px 0 0;
+  max-width: 640px;
+  line-height: 1.5;
+  color: #334;
+}
+
+.muted {
+  color: #556;
+  font-size: 0.95rem;
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
+.badge {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 0.95rem;
+}
+
+.badge.ok {
+  background: #e3f5e9;
+  border: 1px solid #8fcf9f;
+  color: #0d3d1a;
+}
+
+.badge.danger {
+  background: #fde8e6;
+  border: 1px solid #e8a099;
+  color: #5c1510;
+}
+
+.badge.muted {
+  background: #eef1f4;
+  border: 1px solid #d8dee4;
+}
+
+.video-feed {
+  width: 100%;
+  border-radius: 10px;
+  background: #111;
+}
+
+.hidden-canvas {
+  display: none;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  margin: 0 0 12px;
+}
+
+.feature-grid dt {
+  margin: 0;
+  font-weight: 600;
+  color: #445;
+}
+
+.feature-grid dd {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+  color: #334;
+  cursor: pointer;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cue-btn {
+  background: #bf2f16;
+  font-size: 1.05rem;
+  padding: 14px 20px;
+}
+
+.error-text {
+  color: #aa1f1f;
+}
+
 h1 {
   margin-top: 0;
 }

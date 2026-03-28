@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-
-const EYE_CLOSED_THRESHOLD = 0.58;
-const BLINK_WINDOW_MS = 60_000;
-
-function clamp01(value) {
-  return Math.max(0, Math.min(1, value));
-}
+import { getOrCreateAnonymousUserId } from "../lib/anonymousId";
+import {
+  BLINK_WINDOW_MS,
+  EYE_CLOSED_THRESHOLD,
+  SAMPLE_INTERVAL_MS,
+  estimateEyeClosure,
+  estimateHeadTilt
+} from "../lib/features";
 
 export default function HomePage() {
   const videoRef = useRef(null);
@@ -17,6 +18,8 @@ export default function HomePage() {
   const eyeStateRef = useRef(false);
 
   const [running, setRunning] = useState(false);
+  const [anonymousUserId, setAnonymousUserId] = useState(null);
+  const [logReactionToDb, setLogReactionToDb] = useState(false);
   const [features, setFeatures] = useState({
     eye_closure: 0,
     blink_rate: 0,
@@ -26,6 +29,11 @@ export default function HomePage() {
   const [cueVisible, setCueVisible] = useState(false);
   const [apiResult, setApiResult] = useState(null);
   const [error, setError] = useState("");
+  const [analyzePending, setAnalyzePending] = useState(false);
+
+  useEffect(() => {
+    setAnonymousUserId(getOrCreateAnonymousUserId());
+  }, []);
 
   useEffect(() => {
     let stream;
@@ -42,7 +50,7 @@ export default function HomePage() {
         await videoRef.current.play();
         setRunning(true);
 
-        interval = setInterval(sampleFrame, 400);
+        interval = setInterval(sampleFrame, SAMPLE_INTERVAL_MS);
       } catch (err) {
         setError(`Camera access failed: ${err.message}`);
       }
@@ -92,49 +100,6 @@ export default function HomePage() {
     }));
   }
 
-  function estimateEyeClosure(ctx, width, height) {
-    const sx = Math.floor(width * 0.25);
-    const sy = Math.floor(height * 0.2);
-    const sw = Math.floor(width * 0.5);
-    const sh = Math.floor(height * 0.2);
-    const data = ctx.getImageData(sx, sy, sw, sh).data;
-
-    let sum = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      sum += lum;
-    }
-    const avgLum = sum / (data.length / 4);
-    return clamp01(1 - avgLum / 255);
-  }
-
-  function estimateHeadTilt(ctx, width, height) {
-    const data = ctx.getImageData(0, 0, width, height).data;
-    let leftLum = 0;
-    let rightLum = 0;
-    let leftCount = 0;
-    let rightCount = 0;
-
-    for (let y = 0; y < height; y += 8) {
-      for (let x = 0; x < width; x += 8) {
-        const i = (y * width + x) * 4;
-        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        if (x < width / 2) {
-          leftLum += lum;
-          leftCount += 1;
-        } else {
-          rightLum += lum;
-          rightCount += 1;
-        }
-      }
-    }
-
-    const left = leftLum / Math.max(1, leftCount);
-    const right = rightLum / Math.max(1, rightCount);
-    const diff = (left - right) / 255;
-    return clamp01(Math.abs(diff));
-  }
-
   function runReactionTest() {
     setCueVisible(false);
     const delay = 1000 + Math.random() * 2500;
@@ -158,11 +123,17 @@ export default function HomePage() {
   async function submitForAnalysis() {
     setError("");
     setApiResult(null);
+    setAnalyzePending(true);
     try {
+      const body = {
+        ...features,
+        user_id: anonymousUserId,
+        log_reaction_event: logReactionToDb
+      };
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(features)
+        body: JSON.stringify(body)
       });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
@@ -171,12 +142,36 @@ export default function HomePage() {
       setApiResult(json);
     } catch (err) {
       setError(`Analyze request failed: ${err.message}`);
+    } finally {
+      setAnalyzePending(false);
     }
   }
 
+  const statusClass =
+    apiResult?.status === "NOT SAFE"
+      ? "badge danger"
+      : apiResult?.status === "SAFE"
+        ? "badge ok"
+        : "badge muted";
+
   return (
     <main>
-      <h1>Driver Safety Monitor</h1>
+      <header className="page-header">
+        <div>
+          <h1>Driver safety monitor</h1>
+          <p className="lede">
+            Webcam sampling → lightweight features → Next.js proxies to Flask <code>/analyze</code>.
+            No video is stored; only numbers go to the API (and optionally Supabase).
+          </p>
+        </div>
+        {apiResult && (
+          <div className={statusClass}>
+            <strong>{apiResult.status}</strong>
+            <span>confidence {apiResult.confidence}</span>
+          </div>
+        )}
+      </header>
+
       <div className="row">
         <section className="card">
           <h2>Camera</h2>
@@ -185,39 +180,70 @@ export default function HomePage() {
             autoPlay
             muted
             playsInline
-            style={{ width: "100%", borderRadius: 8, background: "#111" }}
+            className="video-feed"
           />
-          <canvas ref={canvasRef} style={{ display: "none" }} />
-          <p>Status: {running ? "Camera running" : "Starting camera..."}</p>
+          <canvas ref={canvasRef} className="hidden-canvas" />
+          <p className="muted">
+            {running ? "Camera running — features update on a short interval." : "Starting camera…"}
+          </p>
         </section>
 
         <section className="card">
-          <h2>Feature Snapshot</h2>
-          <pre>{JSON.stringify(features, null, 2)}</pre>
-          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={runReactionTest}>Start Reaction Test</button>
-            <button onClick={submitForAnalysis}>Analyze</button>
+          <h2>Feature snapshot</h2>
+          <dl className="feature-grid">
+            <dt>eye_closure</dt>
+            <dd>{features.eye_closure}</dd>
+            <dt>blink_rate</dt>
+            <dd>{features.blink_rate} / 60s</dd>
+            <dt>head_tilt</dt>
+            <dd>{features.head_tilt}</dd>
+            <dt>reaction_time</dt>
+            <dd>{features.reaction_time}s</dd>
+          </dl>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={logReactionToDb}
+              onChange={(e) => setLogReactionToDb(e.target.checked)}
+            />
+            Also log this reaction time to <code>reaction_tests</code> (Supabase)
+          </label>
+          <div className="actions">
+            <button type="button" onClick={runReactionTest}>
+              Start reaction test
+            </button>
+            <button
+              type="button"
+              onClick={submitForAnalysis}
+              disabled={analyzePending}
+            >
+              {analyzePending ? "Analyzing…" : "Analyze"}
+            </button>
           </div>
+          {anonymousUserId && (
+            <p className="muted small">
+              Anonymous <code>user_id</code> stored locally for optional session linking.
+            </p>
+          )}
         </section>
       </div>
 
       <section className="card">
-        <h2>Reaction Cue</h2>
-        {!cueVisible && <p>Click "Start Reaction Test" and wait for cue.</p>}
+        <h2>Reaction cue</h2>
+        {!cueVisible && (
+          <p className="muted">Click &quot;Start reaction test&quot; and tap the button as soon as it appears.</p>
+        )}
         {cueVisible && (
-          <button
-            onClick={handleCueClick}
-            style={{ background: "#bf2f16", fontSize: 18, padding: "16px 20px" }}
-          >
-            CLICK NOW
+          <button type="button" onClick={handleCueClick} className="cue-btn">
+            Click now
           </button>
         )}
       </section>
 
       <section className="card">
-        <h2>Analysis Result</h2>
-        {error && <p style={{ color: "#aa1f1f" }}>{error}</p>}
-        {apiResult ? <pre>{JSON.stringify(apiResult, null, 2)}</pre> : <p>No result yet.</p>}
+        <h2>Analysis result</h2>
+        {error && <p className="error-text">{error}</p>}
+        {apiResult ? <pre>{JSON.stringify(apiResult, null, 2)}</pre> : <p className="muted">No result yet.</p>}
       </section>
     </main>
   );
