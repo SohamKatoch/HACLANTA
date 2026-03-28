@@ -1,4 +1,6 @@
-# Drive Awake Monitor
+# DONT- Drive Or Not
+
+DONT- Drive Or Not is a browser-based driver-readiness demo that uses webcam signals and simple scoring to estimate whether someone appears safe to drive. It pairs a live driver monitor with an insurance-facing dashboard so both sides can review risk, history, and alerts in one demo flow.
 
 Starter app for browser-based drowsiness screening with:
 

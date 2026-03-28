@@ -1,6 +1,8 @@
-# Drive Awake
+# DONT- Drive Or Not
 
-Drive Awake is a demo app with:
+DONT- Drive Or Not is a driver-readiness demo that helps a user check whether they look safe to drive based on webcam-derived signals like eye closure, blink rate, head tilt, and reaction time. It also includes an insurance-facing dashboard that turns those readings into a simple risk view for alerts, monitoring, and demo decision-making.
+
+The app includes:
 
 - a driver-facing monitor at `/monitor`
 - an insurance dashboard at `/admin`
