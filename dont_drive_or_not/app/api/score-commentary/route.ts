@@ -40,8 +40,10 @@ async function generateGeminiCommentary(input: CommentaryRequest) {
 
   const confidencePercent = Math.round((input.confidence ?? 0) * 100);
   const prompt = [
-    "Write exactly 2 short witty sentences about a driver readiness confidence score.",
-    "Keep it light, clean, and supportive.",
+    "Write exactly 2 short snarky sentences about a driver readiness confidence score.",
+    "Use playful roast energy, sharp humor, and demo-day personality.",
+    "Keep it clean, non-abusive, and under 35 words total.",
+    "Sound like a smug dashboard giving commentary, not like a safety warning.",
     "Do not mention medicine, diagnosis, or legal advice.",
     `Status: ${input.status ?? "SAFE"}.`,
     `Confidence: ${confidencePercent}%.`,
