@@ -1,14 +1,31 @@
 "use client";
 
-import { startTransition, useEffect, useEffectEvent, useRef, useState } from "react";
-import Link from "next/link";
+import { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCamera, faCheck, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
+import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import {
   analyzeDrowsiness,
   clamp,
   type DrowsinessAssessment,
   type DrowsinessFeatures,
 } from "@/lib/drowsiness";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   computeFaceGeometry,
   createFaceLandmarker,
@@ -35,6 +52,7 @@ const CALIBRATION_FRAMES = 18;
 const REACTION_TIMEOUT_MS = 3000;
 const REACTION_DELAY_RANGE = [7000, 13000] as const;
 const DEFAULT_REACTION_TIME = 0.45;
+const HELP_DIALOG_PREFIX = "drive-awake-help-seen";
 
 type MonitorStage = "idle" | "starting" | "calibrating" | "active" | "error";
 
@@ -71,6 +89,7 @@ type AnalyzeApiResponse = DrowsinessAssessment & {
   saved_capture?: boolean;
 };
 
+const LOCAL_HISTORY_PREFIX = "drive-awake-history";
 const DEFAULT_METRICS: LiveMetrics = {
   eyeClosure: 0,
   blinkRate: 0,
@@ -107,6 +126,77 @@ function createSessionId() {
 function getRandomDelay() {
   const [min, max] = REACTION_DELAY_RANGE;
   return Math.floor(min + Math.random() * (max - min));
+}
+
+function getHistoryStorageKey(userId: string) {
+  return `${LOCAL_HISTORY_PREFIX}:${userId}`;
+}
+
+function getHelpDialogStorageKey(userId: string) {
+  return `${HELP_DIALOG_PREFIX}:${userId || "guest"}`;
+}
+
+function readStoredHistory(userId: string): HistoryItem[] {
+  if (typeof window === "undefined" || !userId) {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getHistoryStorageKey(userId));
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as HistoryItem[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredHistory(userId: string, items: HistoryItem[]) {
+  if (typeof window === "undefined" || !userId) {
+    return;
+  }
+
+  window.localStorage.setItem(getHistoryStorageKey(userId), JSON.stringify(items));
+}
+
+function mergeHistoryItems(primary: HistoryItem[], secondary: HistoryItem[]) {
+  const seen = new Set<string>();
+  const merged = [...primary, ...secondary].filter((item) => {
+    const key = `${item.created_at}-${item.confidence}-${item.user_id}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  return merged.sort(
+    (left, right) =>
+      new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+  );
+}
+
+function buildHistoryItem(
+  userId: string,
+  features: DrowsinessFeatures,
+  assessment: DrowsinessAssessment,
+): HistoryItem {
+  return {
+    id: Date.now(),
+    user_id: userId,
+    eye_closure: features.eye_closure,
+    blink_rate: features.blink_rate,
+    head_tilt: features.head_tilt,
+    reaction_time: features.reaction_time,
+    status: assessment.status,
+    confidence: assessment.confidence,
+    score: assessment.score,
+    source: assessment.provider ?? features.source ?? "browser-local",
+    created_at: features.captured_at ?? new Date().toISOString(),
+  };
 }
 
 function analyzeRegion(
@@ -199,13 +289,13 @@ function MetricCard({
   tone: string;
 }) {
   return (
-    <Card className="rounded-xl backdrop-blur-sm sm:rounded-[1.35rem]">
-      <CardContent className="p-3 sm:p-5">
-        <p className="text-[10px] uppercase tracking-[0.2em] text-black/45 sm:text-xs sm:tracking-[0.25em]">
+    <Card className="h-full border-slate-200 bg-white">
+      <CardContent className="p-4 sm:p-5">
+        <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500 sm:text-xs sm:tracking-[0.25em]">
           {label}
         </p>
         <p className={`mt-2 text-2xl font-semibold sm:mt-3 sm:text-3xl ${tone}`}>{value}</p>
-        <p className="mt-1.5 text-[11px] leading-snug text-black/55 sm:mt-2 sm:text-sm sm:leading-6">
+        <p className="mt-1.5 text-[11px] leading-snug text-slate-600 sm:mt-2 sm:text-sm sm:leading-6">
           {hint}
         </p>
       </CardContent>
@@ -243,18 +333,35 @@ export default function DrowsinessMonitor({
   const [reactionLabel, setReactionLabel] = useState(
     "A cue will flash while monitoring is active.",
   );
+  const [cueProcessingComplete, setCueProcessingComplete] = useState(false);
   const [lastReactionTime, setLastReactionTime] = useState<number | null>(null);
   const [sessionName, setSessionName] = useState("Driver");
   const [sessionEmail, setSessionEmail] = useState("");
   const [sessionUserId, setSessionUserId] = useState("");
   const [sessionVin, setSessionVin] = useState("");
   const [sessionReady, setSessionReady] = useState(false);
+  const [helpDialogOpen, setHelpDialogOpen] = useState(false);
+  const [scoreCommentary, setScoreCommentary] = useState(
+    "Run a capture and I will give you a tiny AI read on your confidence score.",
+  );
+  const [scoreCommentaryLoading, setScoreCommentaryLoading] = useState(false);
+  const [scoreCommentaryProvider, setScoreCommentaryProvider] = useState("local-fallback");
   const [capturePending, setCapturePending] = useState(false);
   const [captureNotice, setCaptureNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [visionEngine, setVisionEngine] = useState<VisionEngine>("heuristic");
+  const commentaryStatus = assessment?.status ?? null;
+  const commentaryConfidence =
+    assessment !== null ? Math.round(assessment.confidence * 100) / 100 : null;
+  const commentaryScore =
+    typeof assessment?.score === "number"
+      ? Math.round(assessment.score * 100) / 100
+      : null;
+  const commentaryRequestKey = assessment
+    ? `${assessment.status}:${Math.round(assessment.confidence * 100)}:${Math.round((assessment.score ?? 0) * 100)}`
+    : "";
 
   function applySession(session: AppSession) {
     setSessionName(session.name);
@@ -283,6 +390,7 @@ export default function DrowsinessMonitor({
   function resetSessionState(nextStage: MonitorStage = "idle") {
     clearReactionTimers();
     setReactionCueVisible(false);
+    setCueProcessingComplete(false);
     setReactionLabel("A cue will flash while monitoring is active.");
     setLastReactionTime(null);
     setAssessment(null);
@@ -323,12 +431,13 @@ export default function DrowsinessMonitor({
   function queueReactionCue() {
     clearReactionTimers();
 
-    if (stage !== "calibrating" && stage !== "active") {
+    if (stage !== "active") {
       return;
     }
 
     reactionCueTimeoutRef.current = window.setTimeout(() => {
       reactionStartedAtRef.current = performance.now();
+      setCueProcessingComplete(false);
       setReactionCueVisible(true);
       setReactionLabel("Cue live. Tap the reaction pad now.");
 
@@ -362,6 +471,15 @@ export default function DrowsinessMonitor({
       `Reaction captured in ${sampleSeconds.toFixed(2)}s.`,
     );
     queueReactionCue();
+  }
+
+  async function handleCueCapture() {
+    if (stage !== "active" || !reactionCueVisible || capturePending) {
+      return;
+    }
+
+    handleReactionPad();
+    await captureCurrentSnapshot();
   }
 
   const analyzeFrame = useEffectEvent(() => {
@@ -398,7 +516,7 @@ export default function DrowsinessMonitor({
     const brightness = clamp(fullFrame.mean / 255);
 
     if ((stage === "calibrating" || stage === "active") && visionEngine === "loading") {
-      setReactionLabel("Loading MediaPipe face model…");
+      setReactionLabel("Loading MediaPipe face model...");
       setMetrics((current) => ({
         ...current,
         brightness: Number(smooth(current.brightness, brightness, 0.2).toFixed(3)),
@@ -462,7 +580,7 @@ export default function DrowsinessMonitor({
       }
 
       if (visionEngine === "mediapipe") {
-        setReactionLabel("Align your face in the frame…");
+        setReactionLabel("Align your face in the frame...");
         setMetrics((current) => ({
           ...current,
           brightness: Number(smooth(current.brightness, brightness, 0.2).toFixed(3)),
@@ -587,6 +705,11 @@ export default function DrowsinessMonitor({
       return;
     }
 
+    const localItems = readStoredHistory(sessionUserId);
+    if (localItems.length > 0) {
+      setHistory(localItems);
+    }
+
     setHistoryLoading(true);
     setHistoryError(null);
 
@@ -603,10 +726,14 @@ export default function DrowsinessMonitor({
       }
 
       const result = (await response.json()) as { items?: HistoryItem[] };
-      setHistory(result.items ?? []);
+      const mergedItems = mergeHistoryItems(result.items ?? [], localItems);
+      setHistory(mergedItems);
+      writeStoredHistory(sessionUserId, mergedItems);
     } catch {
-      setHistory([]);
-      setHistoryError("History is unavailable until the Flask and Supabase connection is active.");
+      setHistory(localItems);
+      if (localItems.length === 0) {
+        setHistoryError("History is unavailable until the Flask and Supabase connection is active.");
+      }
     } finally {
       setHistoryLoading(false);
     }
@@ -673,12 +800,21 @@ export default function DrowsinessMonitor({
 
       startTransition(() => {
         setAssessment(result);
+        setCueProcessingComplete(true);
         setCaptureNotice(
           result.saved_capture
             ? "Snapshot captured and added to this user's history."
-            : "Snapshot analyzed, but backend storage is not connected yet.",
+            : "Snapshot captured and saved locally on this device.",
         );
       });
+
+      const localItem = buildHistoryItem(activeSession.userId, payload, result);
+      const mergedLocalHistory = mergeHistoryItems(
+        [localItem],
+        readStoredHistory(activeSession.userId),
+      );
+      writeStoredHistory(activeSession.userId, mergedLocalHistory);
+      setHistory(mergedLocalHistory);
 
       const historyResponse = await fetch(
         `/api/history?user_id=${encodeURIComponent(activeSession.userId)}&limit=10`,
@@ -689,12 +825,26 @@ export default function DrowsinessMonitor({
 
       if (historyResponse.ok) {
         const historyResult = (await historyResponse.json()) as { items?: HistoryItem[] };
-        setHistory(historyResult.items ?? []);
+        const mergedItems = mergeHistoryItems(
+          historyResult.items ?? [],
+          readStoredHistory(activeSession.userId),
+        );
+        writeStoredHistory(activeSession.userId, mergedItems);
+        setHistory(mergedItems);
       }
     } catch {
+      const fallbackAssessment = analyzeDrowsiness(payload, "local-browser-fallback");
+      const localItem = buildHistoryItem(activeSession.userId, payload, fallbackAssessment);
+      const mergedLocalHistory = mergeHistoryItems(
+        [localItem],
+        readStoredHistory(activeSession.userId),
+      );
+      writeStoredHistory(activeSession.userId, mergedLocalHistory);
       startTransition(() => {
-        setAssessment(analyzeDrowsiness(payload, "local-browser-fallback"));
+        setAssessment(fallbackAssessment);
+        setCueProcessingComplete(false);
         setCaptureNotice("Snapshot capture failed before it could be stored.");
+        setHistory(mergedLocalHistory);
       });
     } finally {
       setCapturePending(false);
@@ -734,22 +884,77 @@ export default function DrowsinessMonitor({
   }, [sessionReady, sessionUserId]);
 
   useEffect(() => {
-    if (stage === "calibrating" || stage === "active") {
-      clearReactionTimers();
+    if (!sessionReady || typeof window === "undefined") {
+      return;
+    }
 
-      reactionCueTimeoutRef.current = window.setTimeout(() => {
-        reactionStartedAtRef.current = performance.now();
-        setReactionCueVisible(true);
-        setReactionLabel("Cue live. Tap the reaction pad now.");
+    const helpSeen = window.localStorage.getItem(
+      getHelpDialogStorageKey(sessionUserId || "guest"),
+    );
 
-        reactionExpireTimeoutRef.current = window.setTimeout(() => {
-          if (reactionStartedAtRef.current !== null) {
-            registerReactionSample(2.5, "Reaction cue missed. Penalty sample recorded.");
-            queueReactionCueRef.current();
-          }
-        }, REACTION_TIMEOUT_MS);
-      }, getRandomDelay());
+    if (!helpSeen) {
+      setHelpDialogOpen(true);
+    }
+  }, [sessionReady, sessionUserId]);
 
+  useEffect(() => {
+    if (!commentaryRequestKey || commentaryConfidence === null || commentaryStatus === null) {
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setScoreCommentaryLoading(true);
+
+      try {
+        const response = await fetch("/api/score-commentary", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            confidence: commentaryConfidence,
+            score: commentaryScore,
+            status: commentaryStatus,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Commentary returned ${response.status}`);
+        }
+
+        const result = (await response.json()) as {
+          provider?: string;
+          text?: string;
+        };
+
+        if (!cancelled && result.text) {
+          setScoreCommentary(result.text);
+          setScoreCommentaryProvider(result.provider ?? "local-fallback");
+        }
+      } catch {
+        if (!cancelled) {
+          setScoreCommentary(
+            "That score came back with a little personality. One more clean capture and this monitor might start acting like your toughest critic.",
+          );
+          setScoreCommentaryProvider("local-fallback");
+        }
+      } finally {
+        if (!cancelled) {
+          setScoreCommentaryLoading(false);
+        }
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [commentaryConfidence, commentaryRequestKey, commentaryScore, commentaryStatus]);
+
+  useEffect(() => {
+    if (stage === "active") {
+      queueReactionCueRef.current();
       return clearReactionTimers;
     }
 
@@ -860,7 +1065,11 @@ export default function DrowsinessMonitor({
             : "Camera error";
 
   const assessmentTone =
-    assessment?.status === "NOT SAFE" ? "text-[var(--risk)]" : "text-[var(--safe)]";
+    assessment?.status === "NOT SAFE"
+      ? "text-[var(--risk)]"
+      : assessment?.status === "SAFE"
+        ? "text-[var(--safe)]"
+        : "text-slate-950";
   const stageBadgeVariant =
     stage === "error"
       ? "danger"
@@ -875,16 +1084,73 @@ export default function DrowsinessMonitor({
       : assessment?.status === "SAFE"
         ? "safe"
         : "default";
+  const visionEngineLabel =
+    visionEngine === "mediapipe"
+      ? "MediaPipe | face landmarks | EAR"
+      : visionEngine === "loading"
+        ? "Loading vision model..."
+        : "Heuristic vision fallback";
+  const stageDescription =
+    stage === "idle"
+      ? "Start a session to calibrate the webcam and establish your baseline."
+      : stage === "starting"
+        ? "Connecting to the webcam and preparing the monitor."
+        : stage === "calibrating"
+          ? "Hold steady while the monitor learns your eye and reaction baseline."
+          : stage === "active"
+            ? "Live drowsiness analysis is running with reaction prompts and rolling metrics."
+            : "The monitor hit a camera issue. You can restart after fixing permissions.";
+  const captureButtonEnabled = stage === "active" && reactionCueVisible && !capturePending;
+  const cueBannerText = capturePending
+    ? "Processing capture..."
+    : captureButtonEnabled
+      ? "Ready to capture"
+      : reactionLabel;
+  const confidenceHistory = useMemo(
+    () =>
+      [...history]
+        .sort(
+          (left, right) =>
+            new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+        )
+        .map((item) => ({
+          id: `${item.id}-${item.created_at}`,
+          confidence: Math.round(item.confidence * 100),
+          label: new Date(item.created_at).toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+          }),
+          fullLabel: new Date(item.created_at).toLocaleString(),
+        })),
+    [history],
+  );
+  const profileInitials = (sessionName || sessionEmail || "Driver")
+    .split(/[\s@._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("") || "DR";
 
   function handleSignOut() {
     clearStoredSession();
     router.push("/login");
   }
 
+  function handleHelpDialogChange(open: boolean) {
+    setHelpDialogOpen(open);
+
+    if (!open && typeof window !== "undefined") {
+      window.localStorage.setItem(
+        getHelpDialogStorageKey(sessionUserId || "guest"),
+        "seen",
+      );
+    }
+  }
+
   if (!sessionReady) {
     return (
       <main className="flex min-h-[40dvh] w-full items-center justify-center py-8">
-        <div className="rounded-full border border-[var(--line)] bg-white/10 px-5 py-3 font-mono text-xs uppercase tracking-[0.25em] text-white/55">
+        <div className="rounded-full border border-slate-200 bg-white px-5 py-3 font-mono text-xs uppercase tracking-[0.25em] text-slate-500 shadow-sm">
           Preparing Session
         </div>
       </main>
@@ -892,27 +1158,47 @@ export default function DrowsinessMonitor({
   }
 
   return (
-    <main className="flex w-full flex-col py-2 sm:py-3">
-      <Card className="relative overflow-hidden rounded-[1.65rem] border border-[var(--line)]/60 bg-[var(--panel-strong)] p-4 shadow-[0_20px_50px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:rounded-[2rem] sm:p-5">
-        <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)]/45 to-transparent sm:inset-x-8" />
+    <Dialog onOpenChange={handleHelpDialogChange} open={helpDialogOpen}>
+      <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 py-8 lg:px-10">
+        <Card className="mb-4 rounded-[1.4rem] border-slate-200 bg-slate-100/90 shadow-none">
+          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-slate-500 sm:text-[11px]">
+                AI Read
+              </p>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-700 sm:text-[15px]">
+                {scoreCommentaryLoading ? "Thinking up a quick read..." : scoreCommentary}
+              </p>
+            </div>
+            <div className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
+              {scoreCommentaryProvider.includes("gemini") ? "Gemini" : "SaS-GPT"}
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-[var(--panel-strong)] p-6 shadow-sm">
+        <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent)]/30 to-transparent" />
 
-        <div className="mb-4 flex flex-col gap-3 rounded-[1.2rem] border border-[var(--line)] bg-white/50 px-3 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-          <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
-            <Badge className="w-fit" variant="outline">
-              Signed In
-            </Badge>
-            <span className="truncate text-xs text-black/65 sm:text-sm">
-              {sessionName ?? "Driver"}
-              {sessionEmail ? ` · ${sessionEmail}` : ""}
-              {sessionVin ? ` · VIN ${sessionVin}` : ""}
-            </span>
+        <div className="mb-6 grid grid-cols-[44px_1fr_44px] items-center">
+          <div />
+          <div className="text-center">
+            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-slate-500 sm:text-xs">
+              VIN Number
+            </p>
+            <p className="mt-2 text-base font-semibold tracking-[0.08em] text-slate-950 sm:text-lg">
+              {sessionVin || "--"}
+            </p>
           </div>
-          <div className="flex gap-2">
-            <Button asChild className="flex-1 sm:flex-none" size="sm" variant="secondary">
-              <Link href="/">Home</Link>
-            </Button>
-            <Button className="flex-1 sm:flex-none" onClick={handleSignOut} size="sm" variant="outline">
-              Sign Out
+          <div className="justify-self-end">
+            <Button
+              aria-label="Open profile and sign out"
+              className="size-11 rounded-full border border-slate-200 bg-white p-0 text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={handleSignOut}
+              size="icon"
+              title="Sign out"
+              type="button"
+              variant="outline"
+            >
+              <span className="text-sm font-semibold tracking-[0.08em]">{profileInitials}</span>
             </Button>
           </div>
         </div>
@@ -920,18 +1206,25 @@ export default function DrowsinessMonitor({
         <div className="flex flex-col gap-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
               <div className="min-w-0 flex-1">
-                <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-black/45 sm:text-xs sm:tracking-[0.35em]">
-                  {visionEngine === "mediapipe"
-                    ? "MediaPipe · face landmarks · EAR"
-                    : visionEngine === "loading"
-                      ? "Loading vision model…"
-                      : "Heuristic vision fallback"}
+                <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-slate-500 sm:text-xs sm:tracking-[0.35em]">
+                  {visionEngineLabel}
                 </p>
-                <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-black sm:text-3xl">
-                  Drive Awake Monitor
-                </h1>
-                <p className="mt-2 max-w-xl text-sm leading-6 text-black/60">
-                  Live face mesh, EAR, blinks, head tilt, and reaction checks—optimized for a phone-sized layout.
+                <div className="mt-2 flex items-center gap-3">
+                  <h1 className="text-2xl font-semibold tracking-[-0.03em] text-slate-950 sm:text-3xl">
+                    Drive Awake Monitor
+                  </h1>
+                  <DialogTrigger asChild>
+                    <button
+                      aria-label="How to use the app"
+                      className="inline-flex size-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:bg-slate-50 hover:text-slate-950"
+                      type="button"
+                    >
+                      <FontAwesomeIcon className="text-base" icon={faCircleQuestion} />
+                    </button>
+                  </DialogTrigger>
+                </div>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                  {stageDescription}
                 </p>
               </div>
 
@@ -943,101 +1236,128 @@ export default function DrowsinessMonitor({
               </Badge>
             </div>
 
-            <div className="flex flex-col gap-4">
-              <Card className="relative overflow-hidden rounded-[1.35rem] bg-[#171411] sm:rounded-[1.65rem]">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  className="aspect-video h-full w-full object-cover [transform:scaleX(-1)]"
-                  muted
-                  playsInline
-                />
-                <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.1),transparent_30%,transparent_70%,rgba(0,0,0,0.16))]" />
-                <div className="pointer-events-none absolute inset-0 bg-[repeating-linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.03)_2px,transparent_2px,transparent_8px)] opacity-30" />
-                <div className="absolute left-2 top-2 flex flex-wrap gap-1.5 sm:left-4 sm:top-4 sm:gap-2">
-                  <div className="rounded-full bg-black/50 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.2em] text-white/85 sm:px-3 sm:py-2 sm:text-[11px] sm:tracking-[0.25em]">
-                    Webcam
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,44rem)_10rem] lg:items-start lg:justify-center">
+              <div className="order-2 mx-auto w-full max-w-4xl lg:order-1">
+                <Card className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-[#171411] shadow-[0_24px_70px_rgba(15,23,42,0.16)]">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    className="aspect-video h-full w-full object-cover [transform:scaleX(-1)]"
+                    muted
+                    playsInline
+                  />
+                  <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.18),transparent_22%,transparent_70%,rgba(0,0,0,0.28))]" />
+                  <div className="absolute left-3 top-4 flex flex-wrap gap-2">
+                    <div className="rounded-full bg-black/50 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-white/90">
+                      Camera
+                    </div>
+                    <div className="rounded-full bg-black/50 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-white/90">
+                      {visionEngine === "mediapipe"
+                        ? "MediaPipe"
+                        : visionEngine === "loading"
+                          ? "Vision..."
+                          : "Heuristic"}
+                    </div>
                   </div>
-                  <div className="rounded-full bg-black/50 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.2em] text-white/85 sm:px-3 sm:py-2 sm:text-[11px] sm:tracking-[0.25em]">
-                    {visionEngine === "mediapipe"
-                      ? "MediaPipe"
-                      : visionEngine === "loading"
-                        ? "Vision…"
-                        : "Heuristic"}
+                  <div className="absolute right-3 top-4">
+                    <div className="rounded-full bg-black/45 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.22em] text-white/85">
+                      Live metrics only
+                    </div>
                   </div>
-                </div>
-                <div className="absolute bottom-2 left-2 right-2 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[11px] leading-snug text-white/82 backdrop-blur-sm sm:bottom-4 sm:left-4 sm:right-4 sm:rounded-2xl sm:px-4 sm:py-3 sm:text-sm">
-                  No frames stored—only live metrics in your browser.
-                </div>
-              </Card>
+                  <AnimatePresence mode="wait">
+                    {cueProcessingComplete ? (
+                      <motion.div
+                        animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+                        className="absolute right-3 top-14 flex size-11 items-center justify-center rounded-full border border-emerald-300/70 bg-emerald-500 text-white shadow-[0_12px_28px_rgba(34,197,94,0.35)]"
+                        exit={{ opacity: 0, scale: 0.6, x: 20, y: -20 }}
+                        initial={{ opacity: 0, scale: 0.45, x: 20, y: -20 }}
+                        key="cue-done"
+                        transition={{ duration: 0.3, ease: "easeOut" }}
+                      >
+                        <FontAwesomeIcon className="text-base" icon={faCheck} />
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        className={`absolute left-3 right-3 top-16 rounded-2xl border px-4 py-3 text-sm font-medium backdrop-blur-sm ${
+                          captureButtonEnabled
+                            ? "border-emerald-300/50 bg-emerald-500/25 text-white"
+                            : "border-white/10 bg-black/35 text-white/88"
+                        }`}
+                        exit={{ opacity: 0, scale: 0.6, x: -100, y: 120 }}
+                        initial={{ opacity: 0, scale: 0.92, y: -16 }}
+                        key="cue-card"
+                        transition={{ duration: 0.35, ease: "easeOut" }}
+                      >
+                        <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/80">
+                          Cue
+                        </p>
+                        <p className="mt-1">{cueBannerText}</p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </Card>
+              </div>
 
-              <Card className="rounded-[1.35rem] sm:rounded-[1.65rem]">
-                <CardHeader className="p-4 pb-0 sm:p-5">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-black/45 sm:text-xs sm:tracking-[0.3em]">
-                    Reaction Test
-                  </p>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-3 p-4 sm:gap-4 sm:p-5">
+              <div className="order-1 flex flex-col items-stretch justify-center gap-3 lg:order-2">
+                <Button
+                  className="bg-[linear-gradient(135deg,#1f7a4f,#33a56b)] text-white shadow-[0_16px_35px_rgba(31,122,79,0.28)] ring-1 ring-emerald-200/70 hover:brightness-105"
+                  onClick={() => void startMonitoring()}
+                  type="button"
+                >
+                  {stage === "idle" || stage === "error" ? "Start" : "Restart"}
+                </Button>
+
+                <div className="flex flex-col items-center justify-center rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm">
                   <Button
-                    className="min-h-[10.5rem] rounded-[1.25rem] text-center text-base font-semibold sm:min-h-44 sm:rounded-[1.5rem] sm:text-lg"
-                    onClick={() => handleReactionPad()}
-                    variant={reactionCueVisible ? "accent" : "secondary"}
-                    size="lg"
+                    aria-label="Capture when cue is ready"
+                    className={`size-24 rounded-full border-4 p-0 shadow-[0_16px_40px_rgba(201,113,50,0.28)] transition-all sm:size-28 ${
+                      captureButtonEnabled
+                        ? "border-emerald-300 bg-[var(--safe)] text-white hover:bg-[var(--safe)]/92"
+                        : "border-[#f2b17f] bg-[var(--accent)] text-white/95 hover:bg-[var(--accent)]"
+                    }`}
+                    disabled={!captureButtonEnabled}
+                    onClick={() => void handleCueCapture()}
+                    size="icon"
                     type="button"
                   >
-                    {reactionCueVisible ? "Tap Now" : "Waiting for Cue"}
+                    <FontAwesomeIcon className="text-3xl sm:text-4xl" icon={faCamera} />
                   </Button>
-                  <p className="text-sm leading-6 text-black/60">{reactionLabel}</p>
-                  <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                    <Card className="rounded-xl border-0 bg-white/70 shadow-none sm:rounded-2xl">
-                      <CardContent className="p-3 sm:p-4">
-                        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-black/40 sm:text-[11px] sm:tracking-[0.25em]">
-                          Last
-                        </p>
-                        <p className="mt-1 text-xl font-semibold text-black sm:mt-2 sm:text-2xl">
-                          {lastReactionTime ? `${lastReactionTime.toFixed(2)}s` : "--"}
-                        </p>
-                      </CardContent>
-                    </Card>
-                    <Card className="rounded-xl border-0 bg-white/70 shadow-none sm:rounded-2xl">
-                      <CardContent className="p-3 sm:p-4">
-                        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-black/40 sm:text-[11px] sm:tracking-[0.25em]">
-                          Rolling
-                        </p>
-                        <p className="mt-1 text-xl font-semibold text-black sm:mt-2 sm:text-2xl">
-                          {metrics.reactionTime.toFixed(2)}s
-                        </p>
-                      </CardContent>
-                    </Card>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+                  <p className="mt-4 text-center font-mono text-[10px] uppercase tracking-[0.24em] text-slate-500">
+                    {capturePending
+                      ? "Capturing"
+                      : captureButtonEnabled
+                        ? "Cue ready"
+                        : "Wait for cue"}
+                  </p>
+                </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              <Button
-                className="w-full sm:w-auto"
-                onClick={() => void startMonitoring()}
-                type="button"
-              >
-                {stage === "idle" || stage === "error" ? "Start Monitoring" : "Restart Session"}
-              </Button>
-              <Button
-                className="w-full sm:w-auto"
-                onClick={() => void captureCurrentSnapshot()}
-                type="button"
-                variant="accent"
-              >
-                {capturePending ? "Capturing Snapshot" : "Capture Snapshot"}
-              </Button>
-              <Button
-                className="w-full sm:w-auto"
-                onClick={stopMonitoring}
-                variant="secondary"
-                type="button"
-              >
-                Stop
-              </Button>
+                <div className="grid flex-1 gap-3 lg:flex-none">
+                  <Card className="rounded-[1.5rem] border-slate-200 bg-white shadow-none">
+                    <CardContent className="p-4">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                        Last
+                      </p>
+                      <p className="mt-2 text-xl font-semibold text-slate-950">
+                        {lastReactionTime ? `${lastReactionTime.toFixed(2)}s` : "--"}
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card className="rounded-[1.5rem] border-slate-200 bg-white shadow-none">
+                    <CardContent className="p-4">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                        Rolling
+                      </p>
+                      <p className="mt-2 text-xl font-semibold text-slate-950">
+                        {metrics.reactionTime.toFixed(2)}s
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Button onClick={stopMonitoring} type="button" variant="secondary">
+                    Stop
+                  </Button>
+                </div>
+              </div>
             </div>
 
             {(cameraError || submissionError || captureNotice) && (
@@ -1061,7 +1381,7 @@ export default function DrowsinessMonitor({
                 value={formatPercent(metrics.eyeClosure)}
               />
               <MetricCard
-                hint="Full blink cycles (eye closed → open) in the last 60 seconds."
+                hint="Full blink cycles (eye closed -> open) in the last 60 seconds."
                 label="Blink Rate"
                 tone={metricTone(metrics.blinkRate / 32, "direct")}
                 value={`${metrics.blinkRate.toFixed(1)}/min`}
@@ -1084,22 +1404,22 @@ export default function DrowsinessMonitor({
               />
             </div>
 
-            <Card className="rounded-[1.35rem] sm:rounded-[1.65rem]">
+            <Card className="rounded-[1.35rem] border-slate-200 bg-white sm:rounded-[1.65rem]">
               <CardHeader className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:p-6">
                 <div className="min-w-0">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-black/45 sm:text-xs sm:tracking-[0.25em]">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500 sm:text-xs sm:tracking-[0.25em]">
                     Analyzer Result
                   </p>
                   <CardTitle className={`mt-2 text-xl sm:mt-3 sm:text-2xl ${assessmentTone}`}>
                     {assessment?.status ?? "Awaiting data"}
                   </CardTitle>
                 </div>
-                <Card className="shrink-0 rounded-xl border-0 bg-white/70 shadow-none sm:rounded-2xl">
+                <Card className="shrink-0 rounded-xl border-slate-200 bg-slate-50 shadow-none sm:rounded-2xl">
                   <CardContent className="px-3 py-2 text-right sm:px-4 sm:py-3">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-black/40 sm:text-[11px] sm:tracking-[0.2em]">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-slate-500 sm:text-[11px] sm:tracking-[0.2em]">
                       Confidence
                     </p>
-                    <p className="mt-0.5 text-xl font-semibold text-black sm:mt-1 sm:text-2xl">
+                    <p className="mt-0.5 text-xl font-semibold text-slate-950 sm:mt-1 sm:text-2xl">
                       {assessment ? formatConfidence(assessment.confidence) : "--"}
                     </p>
                   </CardContent>
@@ -1117,8 +1437,8 @@ export default function DrowsinessMonitor({
                   {(assessment?.reasons ?? [
                     "Start a monitoring session to generate browser-side features and call the analysis endpoint.",
                   ]).map((reason) => (
-                    <Card className="rounded-xl bg-white/65 shadow-none sm:rounded-2xl" key={reason}>
-                      <CardContent className="px-3 py-2.5 text-xs leading-5 text-black/62 sm:px-4 sm:py-3 sm:text-sm sm:leading-6">
+                    <Card className="rounded-xl border-slate-200 bg-slate-50 shadow-none sm:rounded-2xl" key={reason}>
+                      <CardContent className="px-3 py-2.5 text-xs leading-5 text-slate-700 sm:px-4 sm:py-3 sm:text-sm sm:leading-6">
                         {reason}
                       </CardContent>
                     </Card>
@@ -1142,73 +1462,45 @@ export default function DrowsinessMonitor({
               </CardContent>
             </Card>
 
-            <Card className="rounded-[1.35rem] sm:rounded-[1.65rem]">
+            <Card className="rounded-[1.35rem] border-slate-200 bg-white sm:rounded-[1.65rem]">
               <CardHeader className="space-y-1 p-4 sm:p-6">
-                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-black/45 sm:text-xs sm:tracking-[0.25em]">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500 sm:text-xs sm:tracking-[0.25em]">
                   Capture History
                 </p>
                 <CardDescription className="text-xs leading-relaxed sm:text-sm">
-                  Newest captures first. Swipe horizontally on small screens.
+                  Newest captures first.
                 </CardDescription>
               </CardHeader>
               <CardContent className="px-4 pb-4 sm:px-6 sm:pb-6">
                 {historyLoading ? (
-                  <p className="text-sm text-black/60">Loading history...</p>
+                  <p className="text-sm text-slate-600">Loading history...</p>
                 ) : historyError ? (
                   <p className="text-sm text-[var(--warn)]">{historyError}</p>
                 ) : history.length === 0 ? (
-                  <p className="text-sm text-black/60">
-                    No captures yet. Use Capture Snapshot to save the current metrics for this user.
+                  <p className="text-sm text-slate-600">
+                    No captures yet. Use the green capture flow to save confidence snapshots here.
                   </p>
                 ) : (
-                  <div className="-mx-1 overflow-x-auto overflow-y-hidden rounded-xl border border-[var(--line)] sm:mx-0 sm:rounded-[1.25rem]">
-                    <table className="w-full min-w-[520px] text-left text-xs sm:text-sm">
-                      <thead className="bg-white/8">
+                  <div className="-mx-1 overflow-x-auto overflow-y-hidden rounded-xl border border-slate-200 sm:mx-0 sm:rounded-[1.25rem]">
+                    <table className="w-full min-w-[340px] text-left text-xs sm:text-sm">
+                      <thead className="bg-slate-50">
                         <tr>
-                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
                             Time
                           </th>
-                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
-                            Status
-                          </th>
-                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
+                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-slate-500">
                             Confidence
-                          </th>
-                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
-                            Eye
-                          </th>
-                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
-                            Blink
-                          </th>
-                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
-                            Tilt
-                          </th>
-                          <th className="px-3 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-black/55">
-                            Reaction
                           </th>
                         </tr>
                       </thead>
                       <tbody>
                         {history.map((item) => (
-                          <tr className="border-t border-[var(--line)]" key={item.id}>
-                            <td className="px-3 py-3 text-black/72">
+                          <tr className="border-t border-slate-200" key={item.id}>
+                            <td className="px-3 py-3 text-slate-700">
                               {new Date(item.created_at).toLocaleString()}
                             </td>
-                            <td className="px-3 py-3 text-black/80">{item.status}</td>
-                            <td className="px-3 py-3 text-black/72">
+                            <td className="px-3 py-3 text-slate-700">
                               {Math.round(item.confidence * 100)}%
-                            </td>
-                            <td className="px-3 py-3 text-black/72">
-                              {Math.round(item.eye_closure * 100)}%
-                            </td>
-                            <td className="px-3 py-3 text-black/72">
-                              {item.blink_rate.toFixed(1)}
-                            </td>
-                            <td className="px-3 py-3 text-black/72">
-                              {item.head_tilt.toFixed(2)}
-                            </td>
-                            <td className="px-3 py-3 text-black/72">
-                              {item.reaction_time.toFixed(2)}s
                             </td>
                           </tr>
                         ))}
@@ -1218,10 +1510,187 @@ export default function DrowsinessMonitor({
                 )}
               </CardContent>
             </Card>
+
+            <Accordion className="mt-1">
+              <AccordionItem open>
+                <AccordionTrigger>
+                  <span>
+                    <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">
+                      Confidence Graph
+                    </span>
+                    <span className="mt-1 block text-base font-semibold text-slate-950">
+                      Confidence over time
+                    </span>
+                  </span>
+                  <span className="text-slate-400 transition-transform group-open:rotate-180">
+                    ^
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent>
+                  {confidenceHistory.length === 0 ? (
+                    <p className="text-sm text-slate-600">
+                      Capture a few readings and the confidence line graph will appear here.
+                    </p>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <svg
+                          aria-label="Confidence over time line graph"
+                          className="h-56 w-full"
+                          role="img"
+                          viewBox="0 0 720 240"
+                        >
+                          {[0, 25, 50, 75, 100].map((tick) => {
+                            const y = 20 + ((100 - tick) / 100) * 180;
+                            return (
+                              <g key={tick}>
+                                <line
+                                  stroke="rgba(148,163,184,0.28)"
+                                  strokeDasharray="4 6"
+                                  strokeWidth="1"
+                                  x1="54"
+                                  x2="690"
+                                  y1={y}
+                                  y2={y}
+                                />
+                                <text
+                                  fill="#64748b"
+                                  fontSize="11"
+                                  textAnchor="end"
+                                  x="44"
+                                  y={y + 4}
+                                >
+                                  {tick}%
+                                </text>
+                              </g>
+                            );
+                          })}
+                          {confidenceHistory.length > 1 ? (
+                            <polyline
+                              fill="none"
+                              points={confidenceHistory
+                                .map((point, index) => {
+                                  const x =
+                                    54 +
+                                    (index / (confidenceHistory.length - 1)) * (690 - 54);
+                                  const y = 20 + ((100 - point.confidence) / 100) * 180;
+                                  return `${x},${y}`;
+                                })
+                                .join(" ")}
+                              stroke="#1f7a4f"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth="4"
+                            />
+                          ) : null}
+                          {confidenceHistory.map((point, index) => {
+                            const x =
+                              confidenceHistory.length === 1
+                                ? 372
+                                : 54 + (index / (confidenceHistory.length - 1)) * (690 - 54);
+                            const y = 20 + ((100 - point.confidence) / 100) * 180;
+
+                            return (
+                              <g key={point.id}>
+                                <circle cx={x} cy={y} fill="rgba(31,122,79,0.15)" r="11" />
+                                <circle cx={x} cy={y} fill="#1f7a4f" r="6" />
+                                <text
+                                  fill="#0f172a"
+                                  fontSize="11"
+                                  textAnchor="middle"
+                                  x={x}
+                                  y={218}
+                                >
+                                  {point.label}
+                                </text>
+                              </g>
+                            );
+                          })}
+                        </svg>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {confidenceHistory.slice(-3).reverse().map((point) => (
+                          <Card
+                            className="rounded-xl border-slate-200 bg-slate-50 shadow-none"
+                            key={point.id}
+                          >
+                            <CardContent className="p-4">
+                              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                                {point.label}
+                              </p>
+                              <p className="mt-2 text-lg font-semibold text-slate-950">
+                                {point.confidence}%
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500">{point.fullLabel}</p>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
         </div>
 
         <canvas ref={canvasRef} className="hidden" />
-      </Card>
-    </main>
+        </Card>
+      </main>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>How to use Drive Awake</DialogTitle>
+          <DialogDescription>
+            A quick camera check before you save a confidence reading.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
+            <CardContent className="p-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                1. Start
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-700">
+                Press the green Start button to turn on your camera and finish calibration.
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
+            <CardContent className="p-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                2. Wait
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-700">
+                Watch the cue inside the viewfinder. When it turns ready, the camera button becomes green.
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
+            <CardContent className="p-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                3. Capture
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-700">
+                Tap the green camera button to record the reading and save the confidence result.
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="rounded-2xl border-slate-200 bg-slate-50 shadow-none">
+            <CardContent className="p-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                4. Review
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-700">
+                Check the confidence panel, saved history, and graph below the camera view.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+        <DialogFooter>
+          <Button onClick={() => handleHelpDialogChange(false)} type="button">
+            Got it
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

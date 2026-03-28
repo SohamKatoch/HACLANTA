@@ -2,7 +2,7 @@
 
 This repo now has:
 
-- `web/`: Next.js frontend (webcam capture, lightweight feature extraction, reaction test, POST to `/api/analyze`)
+- `dont_drive_or_not/`: Next.js frontend (landing page, login page, live monitor, POST to `/api/analyze`)
 - `api/`: Flask backend (`/analyze` scoring endpoint, optional ML model, optional Supabase logging)
 - `supabase/schema.sql`: `user_data`, `feature_log`, `reaction_tests` (numeric data only)
 - `docs/learnings/`: architecture notes (`LEARNINGS.md`) and pitfalls (`MISTAKES.md`)
@@ -32,30 +32,39 @@ python app.py
 ```
 
 Flask runs at `http://127.0.0.1:5000`.
+If you want Supabase logging, set `SUPABASE_URL` and your server-side `SUPABASE_KEY` in `api/.env`.
 
 ## 2) Run Next.js frontend
 
 **Linux / macOS**
 
 ```bash
-cd web
+cd dont_drive_or_not
 npm install
-cp .env.local.example .env.local
 npm run dev
 ```
 
 **Windows**
 
 ```powershell
-cd web
+cd dont_drive_or_not
 npm install
-copy .env.local.example .env.local
 npm run dev
 ```
 
 Next runs at `http://localhost:3000`.
 
-The frontend calls `fetch('/api/analyze')`, and the Next API route proxies to `FLASK_API_URL`.
+The frontend calls `fetch('/api/analyze')`, and the Next route in `dont_drive_or_not/app/api/analyze/route.ts` can proxy to `FLASK_API_URL`.
+
+## Supabase SQL
+
+Run `supabase/schema.sql` in the Supabase SQL editor before turning on logging from Flask.
+Even with hosted Supabase, this file should stay in the repo because it is the source of truth for recreating the cloud tables in a new project or environment.
+
+## Auth status
+
+The current `/login` flow is still a browser-local placeholder session for the monitor UI.
+Supabase is being used for server-side data storage here, not for Supabase Auth yet.
 
 ## API contract
 

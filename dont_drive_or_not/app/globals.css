@@ -1,23 +1,59 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0f1016;
-  --foreground: #f8f9ff;
-  --panel: rgba(18, 22, 34, 0.78);
-  --panel-strong: rgba(14, 18, 28, 0.92);
-  --line: rgba(186, 205, 255, 0.18);
-  --accent: #c45d2f;
-  --accent-soft: #f0b493;
-  --safe: #245a42;
-  --warn: #8a4d16;
-  --risk: #962f2a;
+  --background: #fffcf5;
+  --foreground: #0f172a;
+  --panel: #ffffff;
+  --panel-strong: rgba(255, 255, 255, 0.94);
+  --line: rgba(15, 23, 42, 0.12);
+  --accent: #c97132;
+  --accent-soft: #f5d7bf;
+  --safe: #1f7a4f;
+  --warn: #b26a12;
+  --risk: #b42318;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-space-grotesk);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-ibm-plex-mono);
+  --animate-blink-cursor: blink-cursor 1s step-end infinite;
+  --animate-rippling: rippling var(--duration) ease-out;
+  --animate-shine: shine var(--duration) infinite linear;
+
+  @keyframes blink-cursor {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+
+  @keyframes rippling {
+    0% {
+      opacity: 1;
+    }
+    100% {
+      transform: scale(2);
+      opacity: 0;
+    }
+  }
+
+  @keyframes shine {
+    0% {
+      background-position: 0% 0%;
+    }
+    50% {
+      background-position: 100% 100%;
+    }
+    100% {
+      background-position: 0% 0%;
+    }
+  }
 }
 
 * {
@@ -29,17 +65,14 @@ html {
 }
 
 body {
-  background:
-    radial-gradient(circle at top left, rgba(55, 74, 126, 0.45), transparent 34%),
-    radial-gradient(circle at top right, rgba(93, 45, 22, 0.35), transparent 28%),
-    linear-gradient(180deg, #141824 0%, #0d111c 100%);
+  background: rgb(255, 252, 245);
   color: var(--foreground);
-  font-family: var(--font-space-grotesk), sans-serif;
-  -webkit-tap-highlight-color: rgba(196, 93, 47, 0.15);
+  font-family: var(--font-inter), sans-serif;
+  -webkit-tap-highlight-color: rgba(201, 113, 50, 0.15);
 }
 
 ::selection {
-  background: rgba(196, 93, 47, 0.22);
+  background: rgba(201, 113, 50, 0.18);
 }
 
 button,
@@ -49,13 +82,25 @@ select {
   font: inherit;
 }
 
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 video {
   display: block;
 }
 
-/* Enforce white-readable text across existing utility-heavy markup */
-[class*="text-black"],
-[class*="text-zinc-"],
-[class*="text-foreground"] {
-  color: #f8f9ff !important;
+@keyframes light-ray-drift {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) rotate(calc(var(--ray-rotate) - var(--ray-swing)));
+  }
+  50% {
+    opacity: var(--ray-intensity);
+    transform: translateX(-50%) rotate(calc(var(--ray-rotate) + var(--ray-swing)));
+  }
 }

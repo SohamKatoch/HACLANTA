@@ -52,6 +52,36 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+## Run With Docker
+
+If you want to run the Next.js app in a container, use these two commands inside `dont_drive_or_not/`:
+
+```bash
+docker build -t drive-awake-monitor .
+docker run --rm -p 3000:3000 drive-awake-monitor
+```
+
+Then open `http://localhost:3000`.
+
+### If You Also Want The Flask API
+
+If your Flask backend is running on your computer, pass `FLASK_API_URL` when starting the container:
+
+```bash
+docker run --rm -p 3000:3000 -e FLASK_API_URL=http://host.docker.internal:5000 drive-awake-monitor
+```
+
+Use `host.docker.internal` so the container can reach the Flask server running on your machine.
+
+### What These Commands Do
+
+- `docker build -t drive-awake-monitor .` creates the image
+- `docker run --rm -p 3000:3000 ...` starts the app on port `3000`
+- `--rm` removes the container after you stop it
+- `-e FLASK_API_URL=...` is only needed when you want Next.js to forward requests to Flask
+
+If you skip `FLASK_API_URL`, the app still runs and uses the built-in fallback scoring logic.
+
 ## Run The Flask Stub
 
 Create a Python environment, then install the backend dependencies:
@@ -69,9 +99,13 @@ Create `.env.local` from `.env.example`:
 
 ```bash
 FLASK_API_URL=http://127.0.0.1:5000
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-1.5-flash
 ```
 
 With that set, the frontend still calls `/api/analyze`, and Next.js forwards the request to Flask. If Flask is offline, the route falls back to built-in threshold logic.
+
+If you want the small AI commentary box above the monitor to use Gemini, put your free-tier key in `dont_drive_or_not/.env.local` as `GEMINI_API_KEY`. If you skip it, the app falls back to built-in local commentary instead of making external model calls.
 
 ## Payload Contract
 

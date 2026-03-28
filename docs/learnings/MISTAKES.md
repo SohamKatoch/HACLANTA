@@ -2,6 +2,26 @@
 
 Document issues we hit or nearly hit so future changes stay consistent.
 
+## Splitting the frontend across two app folders
+
+- **Problem**: Keeping a separate `web/` frontend alongside `dont_drive_or_not/` created confusion about which UI was the real product surface.
+- **Fix**: Consolidate the landing page, login page, and live monitor into `dont_drive_or_not/` so there is one active frontend.
+
+## Placeholder login mistaken for real auth
+
+- **Problem**: The new `/login` page only writes a local browser session. Treating it as real authentication would create false confidence around access control.
+- **Fix**: Document it clearly as a temporary UX gate and replace it with Supabase Auth, Clerk, or backend auth before production.
+
+## Skipping the landing-to-app split
+
+- **Problem**: Starting users directly on the webcam screen makes the product feel like a raw demo and leaves nowhere for onboarding, positioning, or login.
+- **Fix**: Keep `/` as the hero page, `/login` as the gate, and `/monitor` as the monitor route.
+
+## Removing Flask too early
+
+- **Problem**: Because the frontend already computes features, it is tempting to move everything into Next.js. Doing that too early breaks the boundary for server-only secrets, Supabase writes, and future Python model inference.
+- **Fix**: Keep Flask while the app still needs secret-key database writes, model-serving, or heavier Python-side processing.
+
 ## Training vs inference mismatch
 
 - **Problem**: `train_model.py` used raw CSV columns while `app.py` fed a **normalized** vector into `RandomForestClassifier.predict`. Models trained on raw scales will behave incorrectly at inference.

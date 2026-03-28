@@ -11,6 +11,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { TypingAnimation } from "@/components/ui/typing-animation";
 import {
   createLocalAccount,
   createSessionFromAccount,
@@ -60,87 +62,99 @@ export default function LoginForm({ mode }: Readonly<LoginFormProps>) {
   }
 
   return (
-    <Card className="rounded-[1.65rem] border border-[var(--line)]/50 bg-[var(--panel-strong)] sm:rounded-[2rem]">
-      <CardHeader className="gap-2 p-4 sm:gap-3 sm:p-6">
-        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-black/45 sm:text-xs sm:tracking-[0.3em]">
-          Drive Awake Access
-        </p>
-        <CardTitle className="text-2xl tracking-[-0.03em] sm:text-3xl">
-          {isLogin ? "Log in to open the monitor." : "Create an account for the monitor."}
-        </CardTitle>
-        <CardDescription className="max-w-xl text-sm leading-relaxed sm:text-base sm:leading-7">
-          {isLogin
-            ? "Enter the same email, password, and VIN you used when creating the local account."
-            : "This is a lightweight local account flow for now. Email, password, and VIN are stored only in this browser until real auth is added."}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-        <form className="grid gap-4 sm:gap-5" onSubmit={handleSubmit}>
-          <label className="grid gap-2 text-sm text-black/65">
-            <span>Email</span>
-            <input
-              className="rounded-[1.1rem] border border-black/70 bg-black px-4 py-3 text-zinc-200 outline-none transition placeholder:text-zinc-500 focus:border-[var(--accent)]"
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="driver@example.com"
-              required
-              type="email"
-              value={email}
-            />
-          </label>
+    <div className="mx-auto w-full max-w-xl">
+      <Card className="border-slate-200 bg-white">
+        <CardHeader className="gap-2 p-6">
+          {isLogin ? (
+            <TypingAnimation
+              as="h1"
+              className="text-2xl font-semibold tracking-[-0.03em] text-slate-950 sm:text-3xl"
+              delay={120}
+              duration={55}
+              showCursor={false}
+              startOnView={false}
+            >
+              Welcome back
+            </TypingAnimation>
+          ) : (
+            <>
+              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">
+                Create Account
+              </p>
+              <CardTitle className="text-2xl sm:text-3xl">Set up your access</CardTitle>
+            </>
+          )}
+          <CardDescription>
+            {isLogin
+              ? "Enter your account details to launch the live monitor."
+              : "Fill in a few details to create a local demo account."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-6 pt-0">
+          <form className="grid gap-5" onSubmit={handleSubmit}>
+            <label className="grid gap-2 text-sm font-medium text-slate-700">
+              <span>Email</span>
+              <Input
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="your_name@org.in"
+                required
+                type="email"
+                value={email}
+              />
+            </label>
 
-          <label className="grid gap-2 text-sm text-black/65">
-            <span>Password</span>
-            <input
-              className="rounded-[1.1rem] border border-black/70 bg-black px-4 py-3 text-zinc-200 outline-none transition placeholder:text-zinc-500 focus:border-[var(--accent)]"
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="anything-for-now"
-              required
-              type="password"
-              value={password}
-            />
-          </label>
+            <label className="grid gap-2 text-sm font-medium text-slate-700">
+              <span>Password</span>
+              <Input
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="password"
+                required
+                type="password"
+                value={password}
+              />
+            </label>
 
-          <label className="grid gap-2 text-sm text-black/65">
-            <span>VIN Number</span>
-            <input
-              className="rounded-[1.1rem] border border-black/70 bg-black px-4 py-3 text-zinc-200 outline-none transition placeholder:text-zinc-500 focus:border-[var(--accent)]"
-              onChange={(event) => setVin(event.target.value)}
-              placeholder="1HGCM82633A004352"
-              required
-              type="text"
-              value={vin}
-            />
-          </label>
+            <label className="grid gap-2 text-sm font-medium text-slate-700">
+              <span>VIN Number</span>
+              <Input
+                onChange={(event) => setVin(event.target.value)}
+                placeholder="2FTRX18W1XCA12345"
+                required
+                type="text"
+                value={vin}
+              />
+            </label>
 
-          {error ? <p className="text-sm text-[var(--risk)]">{error}</p> : null}
+            {error ? <p className="text-sm text-[var(--risk)]">{error}</p> : null}
 
-          <div className="flex flex-col gap-2 pt-2 sm:flex-row sm:flex-wrap sm:gap-3">
-            <Button className="w-full sm:w-auto" size="lg" type="submit">
-              {isLogin ? "Log In" : "Create Account"}
-            </Button>
-            <Button asChild className="w-full sm:w-auto" size="lg" variant="secondary">
-              <Link href="/">Back To Landing</Link>
-            </Button>
-          </div>
+            <div className="pt-2">
+              <Button className="w-full" size="lg" type="submit">
+                {isLogin ? "Log In" : "Create Account"}
+              </Button>
+            </div>
 
-          <p className="text-sm leading-6 text-black/55">
-            {isLogin ? (
-              <>
-                Need an account? <Link className="underline" href="/signup">Create one here</Link>.
-              </>
-            ) : (
-              <>
-                Already created one? <Link className="underline" href="/login">Log in here</Link>.
-              </>
-            )}
-          </p>
-
-          <p className="text-sm leading-6 text-black/55">
-            Password rules are intentionally disabled for now. This is placeholder
-            local auth, not production security.
-          </p>
-        </form>
-      </CardContent>
-    </Card>
+            <p className="text-sm leading-6 text-slate-600">
+              {isLogin ? (
+                <>
+                  Need an account?{" "}
+                  <Link className="font-medium text-slate-900 underline" href="/signup">
+                    Create one here
+                  </Link>
+                  .
+                </>
+              ) : (
+                <>
+                  Already created one?{" "}
+                  <Link className="font-medium text-slate-900 underline" href="/login">
+                    Log in here
+                  </Link>
+                  .
+                </>
+              )}
+            </p>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

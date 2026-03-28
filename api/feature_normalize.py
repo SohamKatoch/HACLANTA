@@ -2,6 +2,10 @@
 
 import numpy as np
 
+BLINK_RATE_MAX = 32.0
+HEAD_TILT_MAX_DEG = 25.0
+REACTION_TIME_MAX_SEC = 1.4
+
 
 def normalize_features(eye_closure, blink_rate, head_tilt, reaction_time):
     """
@@ -10,10 +14,10 @@ def normalize_features(eye_closure, blink_rate, head_tilt, reaction_time):
     """
     eye_norm = float(np.clip(to_float(eye_closure), 0.0, 1.0))
     blink_rate_raw = to_float(blink_rate)
-    blink_norm = float(np.clip(blink_rate_raw / 30.0, 0.0, 1.0))
-    head_tilt_norm = float(np.clip(to_float(head_tilt), 0.0, 1.0))
+    blink_norm = float(np.clip(blink_rate_raw / BLINK_RATE_MAX, 0.0, 1.0))
+    head_tilt_norm = float(np.clip(to_float(head_tilt) / HEAD_TILT_MAX_DEG, 0.0, 1.0))
     reaction_time_f = to_float(reaction_time, default=0.6)
-    reaction_norm = float(np.clip(reaction_time_f / 1.5, 0.0, 1.0))
+    reaction_norm = float(np.clip(reaction_time_f / REACTION_TIME_MAX_SEC, 0.0, 1.0))
     return eye_norm, blink_norm, head_tilt_norm, reaction_norm, blink_rate_raw
 
 

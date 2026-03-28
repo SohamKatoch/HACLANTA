@@ -5,7 +5,7 @@ function Alert({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "rounded-[1.4rem] border border-[var(--accent-soft)] bg-[#fff3eb] px-4 py-3 text-[#7d4222]",
+        "rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900",
         className,
       )}
       data-slot="alert"
@@ -18,7 +18,7 @@ function Alert({ className, ...props }: React.ComponentProps<"div">) {
 function AlertTitle({ className, ...props }: React.ComponentProps<"h5">) {
   return (
     <h5
-      className={cn("font-mono text-[11px] uppercase tracking-[0.2em]", className)}
+      className={cn("font-mono text-[11px] uppercase tracking-[0.2em] text-amber-800", className)}
       data-slot="alert-title"
       {...props}
     />
